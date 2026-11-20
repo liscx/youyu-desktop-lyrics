@@ -1,0 +1,24 @@
+{
+  "source": "auto",
+  "netease_lyric_dir": "",
+  "font_family": "Microsoft YaHei",
+  "font_size": 30,
+  "font_bold": true,
+  "color_normal": "#B7B7B7",
+  "color_highlight": "#FFFFFF",
+  "color_translated": "#9A9A9A",
+  "color_glow": "#4A90E2",
+  "glow_enabled": true,
+  "outline_width": 3,
+  "line_spacing": 12,
+  "opacity": 0.92,
+  "click_through": true,
+  "locked": true,
+  "position": {
+    "x": 582,
+    "y": 58
+  },
+  "width": 1000,
+  "show_translation": true,
+  "refresh_ms": 80
+}

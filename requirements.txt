@@ -1,0 +1,10 @@
+# 桌面歌词工具依赖
+# Windows 10/11, Python 3.10+
+PySide6>=6.8
+requests>=2.31
+pycryptodome>=3.20
+websocket-client>=1.6
+winrt-runtime==4.2.0
+winrt-Windows.Foundation==4!10.0.28000.2957
+winrt-Windows.Media.Control==4!10.0.28000.2957
+winrt-Windows.Storage.Streams==4!10.0.28000.2957
