@@ -58,7 +58,11 @@ def main():
     window._cycle_theme = cycle_theme
 
     # ---- 托盘 ----
-    build_tray(app, window, monitor, on_switch_theme=switch_theme)
+    build_tray(
+        app, window, monitor,
+        on_switch_theme=switch_theme,
+        needs_calibration=window._needs_calibration,
+    )
 
     # ---- 全局热键 ----
     HotkeyFilter = make_hotkey_filter(QAbstractNativeEventFilter)
@@ -70,11 +74,15 @@ def main():
     app.installNativeEventFilter(hotkey_filter)
     register_all_hotkeys()
 
-    # ---- 快捷键校准 ----
+    # ---- 快捷键校准（仅标题模式生效，CDP 精确进度无需校准）----
+    def nudge(delta):
+        if window._needs_calibration():
+            monitor.adjust(delta)
+
     s_right = QShortcut(QKeySequence("Ctrl+Right"), window)
-    s_right.activated.connect(lambda: monitor.adjust(2000))
+    s_right.activated.connect(lambda: nudge(2000))
     s_left = QShortcut(QKeySequence("Ctrl+Left"), window)
-    s_left.activated.connect(lambda: monitor.adjust(-2000))
+    s_left.activated.connect(lambda: nudge(-2000))
 
     try:
         sys.exit(app.exec())

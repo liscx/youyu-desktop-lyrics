@@ -376,9 +376,16 @@ class LyricWindow(QWidget):
             self.cfg["position"]["y"] = self.y()
             save_config(self.cfg)
 
+    def _needs_calibration(self):
+        """是否需要/支持时间轴校准。
+
+        CDP/SMTC 模式进度精确，校准无效；只有标题模式（本地估算）才需要。
+        """
+        return self.monitor.snapshot().get("source") == "title"
+
     def _align_to_clicked_line(self, pos):
-        """点击歌词行，把播放进度对齐到该行时间戳。"""
-        if not self.lines:
+        """点击歌词行，把播放进度对齐到该行时间戳（仅标题模式有效）。"""
+        if not self.lines or not self._needs_calibration():
             return
         line_h = self.cfg["font_size"] + self.line_spacing
         row = int((pos.y() - 24) // line_h)
@@ -393,8 +400,10 @@ class LyricWindow(QWidget):
         menu = QMenu()
         menu.addAction(self._lock_menu_text(), self._toggle_lock)
         menu.addAction("下一个主题 (Ctrl+Alt+T)", self._next_theme)
-        menu.addAction("对齐到当前行", lambda: self.monitor.align_to(self.lines[self.current_index][0]) if self.lines else None)
-        menu.addAction("重置时间校准", lambda: self.monitor.reset_offset())
+        # 校准入口仅在标题模式（进度为本地估算）下显示
+        if self._needs_calibration():
+            menu.addAction("对齐到当前行", lambda: self.monitor.align_to(self.lines[self.current_index][0]) if self.lines else None)
+            menu.addAction("重置时间校准", lambda: self.monitor.reset_offset())
         menu.addAction("打开设置", self._open_settings)
         menu.addSeparator()
         menu.addAction("上一首", lambda: self.monitor.prev_track())
