@@ -6,7 +6,7 @@ import json
 import time
 import hashlib
 import requests
-from config import CACHE_DIR, ensure_cache_dir
+from .config import CACHE_DIR, ensure_cache_dir
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 

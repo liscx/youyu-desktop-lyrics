@@ -31,7 +31,7 @@ except Exception:
 
 # ---- CDP 精确进度（最高优先级）----
 try:
-    from cdp import CDPClient
+    from .cdp import CDPClient
 except Exception:
     CDPClient = None
 
