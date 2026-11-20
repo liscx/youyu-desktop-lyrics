@@ -13,6 +13,8 @@
   "glow_radius": 10,
   "outline_width": 4,
   "line_spacing": 20,
+  "visible_lines": 4,
+  "show_line_number": true,
   "opacity": 0.88,
   "ambient": true,
   "ambient_density": 55,

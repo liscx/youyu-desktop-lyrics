@@ -114,6 +114,16 @@ class SettingsDialog(QDialog):
         self.spacing_spin.setValue(self.cfg["line_spacing"])
         form.addRow("行间距", self.spacing_spin)
 
+        self.visible_spin = QSpinBox()
+        self.visible_spin.setRange(1, 8)
+        self.visible_spin.setValue(self.cfg.get("visible_lines", 4))
+        self.visible_spin.setSuffix(" 行")
+        form.addRow("显示行数", self.visible_spin)
+
+        self.lineno_check = QCheckBox("显示行号（当前 / 总数）")
+        self.lineno_check.setChecked(self.cfg.get("show_line_number", True))
+        form.addRow("", self.lineno_check)
+
         layout.addLayout(form)
 
         tip = QLabel(
@@ -157,6 +167,8 @@ class SettingsDialog(QDialog):
         self.trans_check.setChecked(self.cfg["show_translation"])
         self.opacity_slider.setValue(int(self.cfg["opacity"] * 100))
         self.spacing_spin.setValue(self.cfg["line_spacing"])
+        self.visible_spin.setValue(self.cfg.get("visible_lines", 4))
+        self.lineno_check.setChecked(self.cfg.get("show_line_number", True))
         self._suppress_theme_change = False
 
     def _on_theme_changed(self):
@@ -184,5 +196,7 @@ class SettingsDialog(QDialog):
             "show_translation": self.trans_check.isChecked(),
             "opacity": self.opacity_slider.value() / 100,
             "line_spacing": self.spacing_spin.value(),
+            "visible_lines": self.visible_spin.value(),
+            "show_line_number": self.lineno_check.isChecked(),
         })
         self.accept()

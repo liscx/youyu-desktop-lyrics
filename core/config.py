@@ -31,6 +31,8 @@ DEFAULTS = {
     "glow_radius": 6,
     "outline_width": 3,
     "line_spacing": 12,
+    "visible_lines": 4,          # 歌词窗同时显示的行数（1-8）
+    "show_line_number": True,    # 右上角显示 当前行/总行数
     "opacity": 0.92,
     # 主题专属开关
     "ambient": False,          # 氛围粒子（忧郁主题 = 雨滴）

@@ -97,6 +97,9 @@ class LyricWindow(QWidget):
         self.show_translation = self.cfg.get("show_translation", True)
         self.line_spacing = self.cfg.get("line_spacing", 12)
         self.outline_width = self.cfg.get("outline_width", 3)
+        # 显示行数与行号
+        self.visible_lines = max(1, min(8, int(self.cfg.get("visible_lines", 4))))
+        self.show_line_number = self.cfg.get("show_line_number", True)
         self.click_through = self.cfg.get("click_through", True)
         self.locked = self.cfg.get("locked", True)
         # 主题专属
@@ -179,7 +182,7 @@ class LyricWindow(QWidget):
     def _resize_to_content(self):
         if not self.lines:
             return
-        n = min(len(self.lines), 4)
+        n = min(len(self.lines), self.visible_lines)
         line_h = self.cfg["font_size"] + self.line_spacing
         h = 40 + n * line_h + (20 if self.translated else 0)
         w = self.cfg.get("width", 1000)
@@ -207,8 +210,12 @@ class LyricWindow(QWidget):
 
         idx = max(0, self.current_index)
         line_h = self.cfg["font_size"] + self.line_spacing
-        start = max(0, idx - 1)
-        visible = 4
+        visible = self.visible_lines
+        # 当前行尽量靠上（约第2行），随可见行数增多略微下移，兼顾上下文与预告
+        anchor = min(1, max(0, visible - 1))
+        start = max(0, idx - anchor)
+        # 避免尾部行数不足时窗口下方留白过多
+        start = min(start, max(0, len(self.lines) - visible))
         y_base = 24
 
         for i in range(start, min(len(self.lines), start + visible)):
@@ -236,8 +243,32 @@ class LyricWindow(QWidget):
                     painter, 20, int(y + self.cfg["font_size"]), text, self.color_normal
                 )
 
+        # 右上角行号：当前行 / 总行数
+        if self.show_line_number:
+            self._draw_line_number(painter, idx)
+
         if not self.locked:
             self._draw_unlock_indicator(painter)
+
+    def _draw_line_number(self, painter, idx):
+        """在窗口右上角绘制「当前行 / 总行数」。"""
+        total = len(self.lines)
+        cur = idx + 1  # 行号从 1 开始
+        rf_font = QFont(self.font)
+        rf_font.setPointSize(max(9, self.cfg["font_size"] - 12))
+        rf_font.setBold(False)
+        painter.save()
+        painter.setFont(rf_font)
+        # 用高亮色的低透明版本，弱化存在感又不至于看不清
+        c = QColor(self.color_highlight)
+        c.setAlpha(170)
+        pen = QPen(c, 1, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.drawText(
+            0, 6, self.width() - 14, 20,
+            Qt.AlignRight | Qt.AlignTop, f"{cur} / {total}"
+        )
+        painter.restore()
 
     def _draw_rain(self, painter):
         """绘制雨滴（忧郁主题氛围）。"""
@@ -389,7 +420,9 @@ class LyricWindow(QWidget):
             return
         line_h = self.cfg["font_size"] + self.line_spacing
         row = int((pos.y() - 24) // line_h)
-        start = max(0, self.current_index - 1)
+        anchor = min(1, max(0, self.visible_lines - 1))
+        start = max(0, self.current_index - anchor)
+        start = min(start, max(0, len(self.lines) - self.visible_lines))
         target = start + row
         if 0 <= target < len(self.lines):
             self.monitor.align_to(self.lines[target][0])
