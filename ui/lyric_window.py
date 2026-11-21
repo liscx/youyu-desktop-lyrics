@@ -204,7 +204,20 @@ class LyricWindow(QWidget):
         # 行切换 -> 触发入场/退场动画与羽毛
         if idx != self.current_index and idx >= 0:
             prev_text = self.lines[self.current_index][1] if 0 <= self.current_index < len(self.lines) else ""
-            self.fx.on_line_changed(idx, self._line_row_y, self._line_h, prev_text=prev_text)
+            prev_char_xs = []
+            prev_row_y = self._line_row_y
+            if prev_text:
+                # 逐字化羽：算出旧行每个字符的中心 x，让羽毛从字原位化出
+                fm = QFontMetrics(self.font)
+                cx = 20.0
+                for ch in prev_text:
+                    cw = fm.horizontalAdvance(ch)
+                    prev_char_xs.append(cx + cw / 2.0)
+                    cx += cw
+                prev_row_y = self._line_row_y - (self.cfg["font_size"] + self.line_spacing)
+            self.fx.on_line_changed(idx, self._line_row_y, self._line_h,
+                                    prev_text=prev_text, prev_char_xs=prev_char_xs,
+                                    prev_row_y=prev_row_y)
         self.current_index = idx
         self.update()
 
@@ -253,12 +266,16 @@ class LyricWindow(QWidget):
         self._line_row_y = y_base + anchor * line_h
         self._line_h = line_h
 
-        # ---- 特效：上一行交叠退场 ----
+        # ---- 特效：上一行交叠退场（逐字化羽 / 整行淡出）----
         if fx_on:
             prev = self.fx.prev_line_state()
             if prev:
                 p_text, p_y, p_h, p_alpha, p_blur, p_spread = prev
-                if p_alpha > 0:
+                if self.fx.word_dissolve:
+                    # 从左到右逐字化为羽毛，向左上方飘散
+                    elapsed = self.fx.time_ms - self.fx.prev_line_start_ms
+                    self._draw_dissolving_line(painter, p_text, p_y, p_h, elapsed)
+                elif p_alpha > 0:
                     self._draw_fading_line(painter, p_text, p_y, p_h, p_alpha, p_blur, p_spread)
 
         for i in range(start, min(len(self.lines), start + visible)):
@@ -394,6 +411,28 @@ class LyricWindow(QWidget):
             painter.drawRoundedRect(x - r, int(y + 2), int(hl_px) + r * 2, int(line_h - 6), r, r)
             painter.restore()
 
+    def _draw_dissolving_line(self, painter, text, y, line_h, elapsed):
+        """上一行退场：从左到右逐字化为羽毛——每个字渐隐 + 向左上漂移 + 羽化。
+
+        与 EffectEngine 里 mode='dissolve' 的羽毛同步（同样的逐字延迟），
+        视觉上就是文字从左边开始一个字一个字散成羽毛飘走。
+        """
+        if not text:
+            return
+        baseline = int(y + self.cfg["font_size"])
+        x = 20.0
+        fm = QFontMetrics(self.font)
+        n = len(text)
+        for i, ch in enumerate(text):
+            a, blur, dx, dy = self.fx.char_dissolve_state(i, n, elapsed)
+            cw = fm.horizontalAdvance(ch)
+            if a > 0.01:
+                self._draw_blurred_text(
+                    painter, x + dx, baseline + dy, ch,
+                    self.color_normal, a, max(blur, 0.25)
+                )
+            x += cw
+
     def _draw_fading_line(self, painter, text, y, line_h, alpha, blur, spread):
         """上一行交叠退场：渐隐 + 羽化扩散。"""
         if alpha <= 0:
@@ -407,12 +446,16 @@ class LyricWindow(QWidget):
         painter.restore()
 
     def _draw_sweep(self, painter, y, line_h, pos):
-        """轻微光线扫过文字：一条低透明斜向高光，随时间循环。"""
+        """光线扫过文字：亮度随位置渐隐，到边界归零，避免硬切。"""
+        env = self.fx.sweep_alpha(pos)
+        if env <= 0:
+            return
         w = self.width()
         sweep_x = -w * 0.3 + pos * w * 1.6
         grad = QLinearGradient(sweep_x, 0, sweep_x + w * 0.25, 0)
+        peak = max(1, int(self.fx.sweep_alpha_max * env))
         grad.setColorAt(0.0, QColor(255, 255, 255, 0))
-        grad.setColorAt(0.5, QColor(242, 246, 250, 28))
+        grad.setColorAt(0.5, QColor(242, 246, 250, peak))
         grad.setColorAt(1.0, QColor(255, 255, 255, 0))
         painter.save()
         painter.setPen(Qt.NoPen)

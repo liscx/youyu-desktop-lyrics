@@ -26,6 +26,14 @@ FX_DEFAULTS = {
     "breath_pct": 0.10,          # 微光呼吸幅度(0-0.5)
     "breath_ms": 3600,           # 呼吸周期(ms)
     "sweep_ms": 4200,            # 扫光周期(ms)
+    "sweep_alpha": 34,           # 光条峰值透明度(0-80)
+    "sweep_fade_start": 55,      # 光条从 55% 处开始渐隐(0-95)，到右边界归零，避免硬切
+    # 逐字化羽消散：歌词消失时从左到右化为羽毛，向左上方飘散
+    "word_dissolve": True,       # 逐字消散（关闭则退回整行渐隐）
+    "dissolve_char_ms": 360,     # 单个字化羽时长(ms)
+    "dissolve_stagger_ms": 420,  # 整行从左到右化羽的延迟跨度(ms)
+    "dissolve_drift_x": 22,      # 消散文字向左漂移(px)
+    "dissolve_drift_y": 34,      # 消散文字向上漂移(px)
     "mist_speed": 0.15,          # 雾气流动速度
     "mist_alpha": 26,            # 雾气不透明度(0-80)
     "feather_alpha": 150,        # 羽毛不透明度(0-255)

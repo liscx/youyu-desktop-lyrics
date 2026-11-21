@@ -21,11 +21,14 @@ ui/effects.py
 self.fx = EffectEngine(cfg)                    # 构造
 self.fx.configure(cfg)                         # 配置变更时重读（apply_config 里）
 self.fx.tick(dt_ms, w, h)                      # 每帧推进（_step_fx，QTimer 33ms ≈ 30fps）
-self.fx.on_line_changed(idx, y, h, prev_text)  # 当前行切换时触发入场/退场/撒羽毛
+self.fx.on_line_changed(idx, y, h, prev_text, prev_char_xs, prev_row_y)  # 行切换：入场/退场/化羽
 self.fx.draw_background(painter, w, h)         # 画雾气 + 远景羽毛（文字下层）
 self.fx.draw_foreground(painter, w, h)         # 画微粒 + 近景羽毛（文字上层）
-self.fx.char_state(i, elapsed)                 # 逐字状态 → (alpha, blur, rise, float_y)
+self.fx.char_state(i, elapsed)                 # 逐字入场 → (alpha, blur, rise, float_y)
+self.fx.char_dissolve_state(i, n, elapsed)     # 逐字消散 → (alpha, blur, dx, dy)，向左上
 self.fx.line_alpha(elapsed, entering)          # 整行入场/退场 → (alpha, blur, spread)
+self.fx.sweep_pos()                            # 扫光位置 0..1
+self.fx.sweep_alpha(pos)                       # 扫光亮度包络 0..1（边界渐隐）
 ```
 
 所有状态集中在引擎，歌词窗只负责调用与把文字画上去。粒子用对象池复用、数量恒定，
@@ -52,9 +55,9 @@ self.fx.line_alpha(elapsed, entering)          # 整行入场/退场 → (alpha,
 
 ### 4. 羽毛漂浮 + 入场/退场撒羽毛
 - **作用**：文字周围生成少量半透明羽毛，缓慢漂浮、旋转、飘远消失；出场/入场时额外撒一小簇。
-- **实现**：`Feather` 粒子，柳叶形 QPainterPath + 羽轴，透明羽毛随时间淡入淡出；对象池上限 `feather_count*3` 防止长跑累积。
+- **实现**：`Feather` 粒子，柳叶形 QPainterPath + 羽轴，透明羽毛随时间淡入淡出；对象池上限 `feather_count*2` 防止长跑累积。`_spawn_burst(mode='enter')` 在行附近撒入场羽毛；`_spawn_burst(mode='dissolve')` 让旧文字逐字化羽——每片羽毛从对应字符的原 x 位置生成，带递增延迟，初速度向左上（`vx<0, vy<0`）。
 - **参数**：`fx.feathers`（开关）、`fx.feather_count`（12）、`fx.feather_alpha`、`fx.feather_color`、`fx.feather_on_enter`、`fx.feather_on_exit`。
-- **调用**：`tick()` 推进；`_burst_feathers()` 生成；`draw_foreground()` 绘制。
+- **调用**：`tick()` 推进；`_spawn_burst()` 生成；`draw_foreground()` 绘制。
 
 ### 5. 远景羽毛（空间层次）
 - **作用**：更小、更淡、更慢的羽毛画在文字下方，制造纵深感。
@@ -83,17 +86,17 @@ self.fx.line_alpha(elapsed, entering)          # 整行入场/退场 → (alpha,
 - **参数**：`fx.soft_glow`（开关）、主题 `outline_width`、主题 `glow_enabled`/`glow_radius`。
 - **调用**：歌词窗 `_draw_outline_for_text` / `_draw_effect_line`。
 
-### 10. 光线扫过
-- **作用**：一条低透明斜向高光周期性掠过文字。
-- **实现**：`sweep_pos()` 返回 0..1 位置，歌词窗用渐变矩形绘制。
-- **参数**：`fx.light_sweep`（开关）、`fx.sweep_ms`（4200）。
-- **调用**：歌词窗 `_draw_sweep`。
+### 10. 光线扫过（到边界平滑渐隐）
+- **作用**：一条低透明斜向高光周期性掠过文字，向右滚动时逐渐变淡，抵达边界时完全消失，不会突然"撞墙"硬切。
+- **实现**：`sweep_pos()` 给出 0..1 位置；`sweep_alpha(pos)` 给出亮度包络——左侧 10% 淡入，巡航到 `sweep_fade_start` 后按二次缓动衰减到 0。因为位置用 `%` 循环，两端 alpha 都是 0，回卷时无跳变。歌词窗把包络乘到渐变峰值 alpha 上。
+- **参数**：`fx.light_sweep`（开关）、`fx.sweep_ms`（4200）、`fx.sweep_alpha`（峰值 34）、`fx.sweep_fade_start`（渐隐起点 55%）。
+- **调用**：歌词窗 `_draw_sweep` → `sweep_pos()` + `sweep_alpha()`。
 
-### 11. 行切换交叠（退场动画）
-- **作用**：新歌词出现时，上一句以渐隐 + 羽化扩散短暂交叠，再融入雾中消失。
-- **实现**：`on_line_changed` 记录上一行；`prev_line_state()` 返回退场状态；歌词窗先画退场行再画当前行。
-- **参数**：`fx.crossfade`（开关）、`fx.fade_out_ms`（700）、`fx.feather_on_exit`。
-- **调用**：`prev_line_state()` + 歌词窗 `_draw_fading_line`。
+### 11. 逐字化羽消散（退场动画）
+- **作用**：新歌词出现时，上一句从左边开始**一个字一个字化为羽毛**，向左上方飘散、渐隐、融入雾中——不是整行一起淡出。
+- **实现**：行切换时歌词窗用 QFontMetrics 算出旧行每个字符的中心 x，连同旧行 y 传给 `on_line_changed`。引擎记录这些位置并生成带递增延迟、向左上运动的消散羽毛（`mode='dissolve'`）；`char_dissolve_state(i, n, elapsed)` 让文字按同样延迟逐字渐隐 + 向左上漂移 + 羽化，两者同步即为"字化羽"。关闭 `word_dissolve` 则退回旧的整行渐隐路径 `_draw_fading_line`。
+- **参数**：`fx.crossfade`（交叠开关）、`fx.word_dissolve`（逐字化羽开关）、`fx.feather_on_exit`（化羽羽毛开关）、`fx.dissolve_char_ms`（单字时长 360）、`fx.dissolve_stagger_ms`（整行跨度 420）、`fx.dissolve_drift_x/y`（左移 22 / 上移 34px）、`fx.fade_out_ms`（旧路径时长）。
+- **调用**：`prev_line_state()` + 歌词窗 `_draw_dissolving_line()`（或 `_draw_fading_line()`）。
 
 ### 12. 整体上下浮动
 - **作用**：歌词整体非常轻微地上下浮动，增加呼吸感。
@@ -114,7 +117,11 @@ self.fx.line_alpha(elapsed, entering)          # 整行入场/退场 → (alpha,
 | 羽化 | blur_max | 7 | 模糊最大程度 |
 | 距离 | rise_px / float_px | 12 / 3 | 上浮 / 浮动幅度 |
 | 呼吸 | breath_pct / breath_ms | 0.10 / 3600 | 幅度 / 周期 |
-| 扫光 | sweep_ms | 4200 | 周期 |
+| 扫光 | sweep_ms / sweep_alpha | 4200 / 34 | 周期 / 光条峰值亮度 |
+| 扫光 | sweep_fade_start | 55 | 从 55% 处开始渐隐，到右边界归零（无硬切） |
+| 化羽消散 | word_dissolve / feather_on_exit | true / true | 逐字化羽 / 化羽羽毛开关 |
+| 化羽消散 | dissolve_char_ms / dissolve_stagger_ms | 360 / 420 | 单字时长 / 整行从左到右跨度 |
+| 化羽消散 | dissolve_drift_x / dissolve_drift_y | 22 / 34 | 文字向左 / 向上漂移(px) |
 | 雾气 | mist_speed / mist_alpha | 0.15 / 26 | 速度 / 浓度 |
 | 粒子 | feather_count / far_feather_count / mote_count | 12 / 8 / 22 | 数量 |
 | 颜色 | feather_color / mist_color | #DCE6F1 / #B7C6D8 | 羽毛 / 雾气 |

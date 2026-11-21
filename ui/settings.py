@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QLabel, QComboBox, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QSlider, QCheckBox, QFontComboBox, QSpinBox,
-    QColorDialog, QTabWidget, QWidget, QGroupBox, QGridLayout,
+    QColorDialog, QTabWidget, QWidget, QGroupBox, QGridLayout, QScrollArea,
 )
 from PySide6.QtGui import QColor, QFont
 
@@ -178,6 +178,7 @@ class SettingsDialog(QDialog):
             ("float", "整体浮动"), ("light_sweep", "光线扫过"),
             ("crossfade", "行切换交叠"), ("soft_glow", "文字柔光"),
             ("feather_on_enter", "入场羽毛"), ("feather_on_exit", "退场羽毛"),
+            ("word_dissolve", "逐字化羽消散"),
         ]
         self.fx_switches = {}
         for i, (key, label) in enumerate(switches):
@@ -197,7 +198,11 @@ class SettingsDialog(QDialog):
             s = QSlider(Qt.Horizontal)
             s.setRange(lo, hi)
             s.setValue(int(fx.get(key, FX_DEFAULTS[key])))
-            pform.addRow(f"{label} ({s.value()})", s)
+            lab = QLabel(f"{label} ({s.value()})")
+            s.valueChanged.connect(
+                lambda v, lab=lab, label=label: lab.setText(f"{label} ({v})")
+            )
+            pform.addRow(lab, s)
             self.fx_sliders[key] = s
             return s
 
@@ -211,6 +216,12 @@ class SettingsDialog(QDialog):
         add_int("mist_alpha", "雾气浓度", 0, 80)
         add_int("feather_count", "羽毛数量", 0, 30)
         add_int("mote_count", "微粒数量", 0, 50)
+        add_int("sweep_alpha", "光条亮度", 0, 80)
+        add_int("sweep_fade_start", "光条渐隐起点(%)", 0, 95)
+        add_int("dissolve_char_ms", "单字化羽时长(ms)", 100, 1200)
+        add_int("dissolve_stagger_ms", "整行化羽跨度(ms)", 0, 1500)
+        add_int("dissolve_drift_x", "化羽左移(px)", 0, 80)
+        add_int("dissolve_drift_y", "化羽上移(px)", 0, 80)
         p_group.setLayout(pform)
         layout.addWidget(p_group)
 
@@ -228,7 +239,11 @@ class SettingsDialog(QDialog):
         layout.addLayout(ease_row)
 
         layout.addStretch()
-        return page
+        # 参数较多，放进滚动区避免窗口超出屏幕
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        return scroll
 
     # ---------------- 同步 / 应用 ----------------
     def _sync_controls_from_cfg(self):

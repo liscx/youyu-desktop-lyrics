@@ -137,6 +137,9 @@ MIST = {
         "light_sweep": True,
         "crossfade": True,
         "soft_glow": True,
+        "feather_on_enter": True,
+        "feather_on_exit": True,    # 退场时文字化为羽毛向左上飘散
+        "word_dissolve": True,      # 从左到右逐字消散
     },
 }
 
