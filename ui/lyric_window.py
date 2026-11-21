@@ -7,7 +7,7 @@
 import random
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtWidgets import QWidget, QMenu, QApplication, QDialog
+from PySide6.QtWidgets import QWidget, QMenu, QApplication
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetrics, QBrush,
     QPen, QPainterPath, QLinearGradient,
@@ -69,9 +69,15 @@ class LyricWindow(QWidget):
         # 补位模式状态
         self.refill_mode = "batch"
         self.read_lines = 2
+        self.refill_delay_ms = 1000   # 原位替换：空行位等消散羽毛飘走后再补入的延迟
         self._slot_lines = []      # slot 模式：每个固定行位当前显示的行索引
         self._next_line = 0        # slot 模式：下一个待补入的行索引
+        self._pending_refill = {}  # slot 模式：{行位: (待补入行索引, 到期时刻ms)}——延迟补位
         self._last_layout = []     # 上一帧布局，用于定位正在消散的行
+        self._dissolving_idx = -1  # 正在化羽退场的行；-1 表示无
+        # 逐字浮现：{行索引: 首次进入窗口的时刻(ms)}。按"补位入场"触发，
+        # 而不是读条唱到它才触发——歌词补进窗口时逐字浮现，唱到时不再重播。
+        self._reveal_start = {}
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -99,7 +105,23 @@ class LyricWindow(QWidget):
         self._fx_last_tick = now
         if self.fx.enabled:
             self.fx.tick(dt, self.width(), self.height())
+            # 逐字跟随消散：按当前读条进度推进每字的消散
+            if self.fx.on_follow_dissolve and 0 <= self.current_index < len(self.lines):
+                self.fx.follow_step(self._line_progress(), dt)
             self.update()
+
+    def _line_progress(self):
+        """当前行的读条进度 0..1（按 position_ms 在时间轴上线性计算）。"""
+        if not (0 <= self.current_index < len(self.lines)):
+            return 0.0
+        state = self.monitor.snapshot()
+        pos_ms = state.get("position_ms", 0)
+        cur_ms = self.lines[self.current_index][0]
+        next_ms = (self.lines[self.current_index + 1][0]
+                   if self.current_index + 1 < len(self.lines) else cur_ms + 3000)
+        if next_ms <= cur_ms:
+            return 0.0
+        return max(0.0, min(1.0, (pos_ms - cur_ms) / (next_ms - cur_ms)))
 
     def _init_position(self):
         pos = self.cfg.get("position", {})
@@ -120,6 +142,9 @@ class LyricWindow(QWidget):
         self.font.setBold(self.cfg.get("font_bold", True))
         self.color_normal = QColor(self.cfg["color_normal"])
         self.color_highlight = QColor(self.cfg["color_highlight"])
+        self.color_reading = QColor(
+            self.cfg.get("color_reading", self.cfg["color_normal"])
+        )
         self.color_translated = QColor(self.cfg["color_translated"])
         self.color_glow = QColor(self.cfg["color_glow"])
         self.glow_enabled = self.cfg.get("glow_enabled", True)
@@ -135,6 +160,10 @@ class LyricWindow(QWidget):
         if self.refill_mode not in ("batch", "slot", "shift"):
             self.refill_mode = "batch"
         self.read_lines = max(1, min(8, int(self.cfg.get("read_lines", 2))))
+        # 原位替换：空行位等待消散特效走完再补入的延迟（fx 内参数，特效关闭时不延迟）
+        self.refill_delay_ms = max(0, int(
+            self.cfg.get("fx", {}).get("refill_delay_ms", 1000)
+        ))
         # 特效引擎重读配置
         self.fx.configure(self.cfg)
         self.click_through = self.cfg.get("click_through", True)
@@ -197,26 +226,51 @@ class LyricWindow(QWidget):
         """换歌时重置补位状态。"""
         self._slot_lines = []
         self._next_line = 0
+        self._pending_refill = {}
         self._last_layout = []
         self._cur_row = 0
+        self._reveal_start = {}  # 逐字浮现：换歌后全部行重新算入场
         self.fx._batch_change_ms = -1
 
     def _update_slots(self, prev_idx, idx):
-        """slot（原位替换）：刚唱完的行位立即补入下一句歌词。"""
+        """slot（原位替换）：唱完的行位先留空，等消散特效走完再补入下一句。"""
+        import time as _time
         n = len(self.lines)
         if not self._slot_lines or idx not in self._slot_lines and prev_idx not in self._slot_lines:
             self._slot_lines = [i for i in range(idx, min(n, idx + self.read_lines))]
             while len(self._slot_lines) < self.read_lines:
                 self._slot_lines.append(-1)
             self._next_line = idx + self.read_lines
+            self._pending_refill = {}
             return
         if prev_idx in self._slot_lines:
             pos = self._slot_lines.index(prev_idx)
-            if self._next_line < n:
-                self._slot_lines[pos] = self._next_line
+            line = self._next_line if self._next_line < n else -1
+            if line >= 0:
                 self._next_line += 1
-            else:
-                self._slot_lines[pos] = -1
+            # 先清空该行位（旧行由退场特效继续绘制），登记到点后再补入
+            self._slot_lines[pos] = -1
+            self._pending_refill.pop(pos, None)
+            if line >= 0:
+                delay = self.refill_delay_ms if self.fx.enabled else 0
+                if delay > 0:
+                    due = _time.monotonic() * 1000 + delay
+                    self._pending_refill[pos] = (line, due)
+                else:
+                    self._slot_lines[pos] = line
+
+    def _process_pending_refill(self):
+        """兑现到期的延迟补位：到点（或该行已追上当前行）后填回空行位。"""
+        if not self._pending_refill:
+            return
+        import time as _time
+        now = _time.monotonic() * 1000
+        for pos, (line, due) in list(self._pending_refill.items()):
+            # line 追上当前行说明发生了跳转/seek，必须立即补入，否则当前行会缺失
+            if now >= due or line <= self.current_index:
+                if 0 <= pos < len(self._slot_lines):
+                    self._slot_lines[pos] = line
+                del self._pending_refill[pos]
 
     def _compute_layout(self, idx):
         """返回 ([(line_index, row), ...], cur_row)。决定每帧显示哪些行、在哪一行。"""
@@ -259,6 +313,7 @@ class LyricWindow(QWidget):
             self.translated = result["translated"] if self.show_translation else []
             self.current_index = -1
             self._reset_refill_state()
+            self.fx.reset_follow_all()
             self._resize_to_content()
 
         if not self.lines:
@@ -277,7 +332,10 @@ class LyricWindow(QWidget):
                 hi = mid - 1
         # 行切换 -> 触发入场/退场动画与羽毛
         if idx != self.current_index and idx >= 0:
+            # 先兑现上一批到期的延迟补位，避免切行时把还没到点的空位误判
+            self._process_pending_refill()
             prev_idx = self.current_index
+            self._dissolving_idx = prev_idx  # 正在退场的行：本帧不再静态绘制
             # slot 模式：刚唱完的行位补入下一句
             if self.refill_mode == "slot":
                 self._update_slots(prev_idx, idx)
@@ -296,10 +354,34 @@ class LyricWindow(QWidget):
                     cw = fm.horizontalAdvance(ch)
                     prev_char_xs.append(cx + cw / 2.0)
                     cx += cw
+                # 整行化羽：首尾羽毛对齐文字左右边界，让特效横向宽度严格等于整行文字宽度
+                if len(prev_char_xs) >= 2:
+                    prev_char_xs[0] = 20.0
+                    prev_char_xs[-1] = cx
             self.fx.on_line_changed(idx, self._line_row_y, self._line_h,
                                     prev_text=prev_text, prev_char_xs=prev_char_xs,
                                     prev_row_y=prev_row_y)
+            # 逐字跟随消散：把新行的字符交给引擎跟踪（旧行未散完的字自动转入收尾）
+            if self.fx.on_follow_dissolve:
+                new_text = self.lines[idx][1]
+                fm = QFontMetrics(self.font)
+                cx = 20.0
+                new_xs = []
+                for ch in new_text:
+                    cw = fm.horizontalAdvance(ch)
+                    new_xs.append(cx + cw / 2.0)
+                    cx += cw
+                # 逐字消散的横向范围严格等于整行文字宽度（首尾对齐左右边界）
+                if len(new_xs) >= 2:
+                    new_xs[0] = 20.0
+                    new_xs[-1] = cx
+                # 顺序很关键：先 reset 让引擎快照"旧行"字符到收尾队列，
+                # 再 set 新行字符，否则收尾会用错内容
+                self.fx.follow_reset(idx, new_xs, self._line_row_y, self._line_h)
+                self.fx.set_follow_chars(new_text)
         self.current_index = idx
+        # 每帧兑现到期的延迟补位（即便本帧没有切行，延迟到点也要补上）
+        self._process_pending_refill()
         self.update()
 
     def _resize_to_content(self):
@@ -321,6 +403,11 @@ class LyricWindow(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        # 透明窗口必须每帧显式清成全透明，否则上一帧的文字/粒子会残留累积，
+        # 表现为"歌词和羽毛化掉后还留在屏幕上"
+        painter.setCompositionMode(QPainter.CompositionMode_Clear)
+        painter.fillRect(self.rect(), Qt.transparent)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
         fx_on = self.fx.enabled
         w, h = self.width(), self.height()
@@ -345,6 +432,15 @@ class LyricWindow(QWidget):
         layout, cur_row = self._compute_layout(idx)
         self._cur_row = cur_row
         self._last_layout = layout
+        # 逐字浮现入场：某行首次出现在窗口（= 补位发生的那一刻）时记录时刻。
+        # 之后读条唱到它时不再重新浮现——于是"逐字出现"只在补位时播放。
+        now_ms = self.fx.time_ms
+        batch_delay = (self.fx.batch_gap_ms
+                       if self.refill_mode == "batch" and self.fx._batch_change_ms >= 0
+                       else 0)
+        for li, _row in layout:
+            if li not in self._reveal_start:
+                self._reveal_start[li] = now_ms + batch_delay
         y_base = 24
         self._line_row_y = y_base + cur_row * line_h
         self._line_h = line_h
@@ -352,17 +448,23 @@ class LyricWindow(QWidget):
         # batch 模式的整批淡入：空窗期内新批次整体不显示
         batch_a = self.fx.batch_alpha() if fx_on and self.refill_mode == "batch" else 1.0
 
-        # ---- 特效：上一行交叠退场（逐字化羽 / 整行淡出）----
+        # ---- 特效：退场（逐字跟随收尾 / 整行化羽 / 整行淡出）----
         if fx_on:
-            prev = self.fx.prev_line_state()
-            if prev:
-                p_text, p_y, p_h, p_alpha, p_blur, p_spread = prev
-                if self.fx.word_dissolve:
-                    # 从左到右逐字化为羽毛，向左上方飘散
-                    elapsed = self.fx.time_ms - self.fx.prev_line_start_ms
-                    self._draw_dissolving_line(painter, p_text, p_y, p_h, elapsed)
-                elif p_alpha > 0:
-                    self._draw_fading_line(painter, p_text, p_y, p_h, p_alpha, p_blur, p_spread)
+            if self.fx.on_follow_dissolve:
+                # 逐字跟随消散：上一行未散完的字继续原地化羽散完
+                tail = self.fx.follow_prev_state()
+                if tail:
+                    self._draw_follow_tail(painter, tail, self.fx._follow_prev_y)
+            else:
+                prev = self.fx.prev_line_state()
+                if prev:
+                    p_text, p_y, p_h, p_alpha, p_blur, p_spread = prev
+                    if self.fx.word_dissolve:
+                        # 从左到右逐字化为羽毛，向左上方飘散
+                        elapsed = self.fx.time_ms - self.fx.prev_line_start_ms
+                        self._draw_dissolving_line(painter, p_text, p_y, p_h, elapsed)
+                    elif p_alpha > 0:
+                        self._draw_fading_line(painter, p_text, p_y, p_h, p_alpha, p_blur, p_spread)
 
         for line_index, row in layout:
             ms, text = self.lines[line_index]
@@ -370,11 +472,20 @@ class LyricWindow(QWidget):
             # 整批补位：已唱过的行不再驻留显示（已化羽消散），只留空位
             if self.refill_mode == "batch" and line_index < idx:
                 continue
+            # 正在退场的那一帧：这一行已由上面的退场特效绘制，
+            # 不能再作为静态行画一遍，否则文字看起来"消散了却还在"
+            _exiting = ((fx_on and self.fx.word_dissolve
+                         and self.fx.prev_line_state() is not None)
+                        or (fx_on and self.fx.on_follow_dissolve
+                            and self.fx.follow_prev_state() is not None))
+            if _exiting and line_index == getattr(self, "_dissolving_idx", -2):
+                continue
             if line_index == idx:
                 if self.accent_line:
                     self._draw_accent_line(painter, y, line_h)
                 if fx_on:
-                    elapsed = self.fx.time_ms - self.fx.line_start_ms
+                    # 逐字浮现按"该行补进窗口"的时刻起算，不再按读条切行时刻
+                    elapsed = now_ms - self._reveal_start.get(idx, self.fx.line_start_ms)
                     self._draw_effect_line(painter, text, y, line_h, elapsed, alpha=batch_a)
                 else:
                     self._draw_highlight_line(painter, text, y, line_h, alpha=batch_a)
@@ -385,22 +496,34 @@ class LyricWindow(QWidget):
                         p.setPointSize(max(10, self.cfg["font_size"] - 8))
                         painter.setFont(p)
                         painter.setPen(self.color_translated)
-                        painter.drawText(20, int(y + line_h - 2), trans_text)
+                        fy = self.fx.float_offset() if fx_on else 0.0
+                        painter.drawText(20, int(y + line_h - 2 + fy), trans_text)
                         painter.setFont(self.font)
             else:
                 painter.setFont(self.font)
                 c = QColor(self.color_normal)
                 c.setAlpha(int(c.alpha() * batch_a))
-                self._draw_outlined_text(
-                    painter, 20, int(y + self.cfg["font_size"]), text, c
-                )
+                # 逐字浮现只在"补进窗口"后的一段时间内播放；播放完回归静态绘制。
+                reveal_elapsed = now_ms - self._reveal_start.get(line_index, now_ms)
+                reveal_life = (len(text) * self.fx.char_stagger_ms
+                               + self.fx.fade_in_ms)
+                if fx_on and self.fx.on_char and reveal_elapsed < reveal_life:
+                    self._draw_reveal_line(painter, text, y, reveal_elapsed, alpha=batch_a)
+                else:
+                    # 静态预览行也要跟随整体上下浮动，否则只有当前行在动
+                    fy = self.fx.float_offset() if fx_on else 0.0
+                    self._draw_outlined_text(
+                        painter, 20, int(y + self.cfg["font_size"] + fy), text, c
+                    )
 
         # ---- 特效前景层：微粒 + 近景羽毛 + 扫光 ----
         if fx_on:
             self.fx.draw_foreground(painter, w, h)
             sweep = self.fx.sweep_pos()
             if sweep >= 0:
-                self._draw_sweep(painter, self._line_row_y, line_h, sweep)
+                self._draw_sweep(
+                    painter, self._line_row_y + self.fx.float_offset(), line_h, sweep
+                )
 
         if self.show_line_number:
             self._draw_line_number(painter, idx)
@@ -457,50 +580,89 @@ class LyricWindow(QWidget):
         painter.drawPath(path)
 
     def _draw_effect_line(self, painter, text, y, line_h, elapsed, alpha=1.0):
-        """当前行：逐字从雾中浮现 + 上浮 + 柔光 + 高亮进度填充。"""
+        """当前行：逐字从雾中浮现 + 上浮 + 柔光 + 高亮进度填充 + 逐字跟随消散。"""
         baseline = int(y + self.cfg["font_size"])
         x = 20
         fm = QFontMetrics(self.font)
-        # 先按进度算出整行高亮宽度（沿用逐字填充语义）
-        state = self.monitor.snapshot()
-        pos_ms = state.get("position_ms", 0)
-        cur_ms = self.lines[self.current_index][0] if self.current_index >= 0 else 0
-        next_ms = (self.lines[self.current_index + 1][0]
-                   if self.current_index + 1 < len(self.lines) else cur_ms + 3000)
-        progress = max(0.0, min(1.0, (pos_ms - cur_ms) / (next_ms - cur_ms))) if next_ms > cur_ms else 0.0
+        progress = self._line_progress()
         total_w = fm.horizontalAdvance(text)
         hl_px = total_w * progress
 
         breathe = self.fx.breathe() * alpha
+        follow_on = self.fx.enabled and self.fx.on_follow_dissolve
         cx = x
         for i, ch in enumerate(text):
             a, blur, rise, float_y = self.fx.char_state(i, elapsed)
-            if a <= 0:
+            # 逐字跟随消散：读条扫过的字可见度逐渐降到 0
+            if follow_on:
+                a *= self.fx.follow_char_alpha(i)
+            if a <= 0.01:
                 cx += fm.horizontalAdvance(ch)
                 continue
             char_w = fm.horizontalAdvance(ch)
             cy = baseline - rise + float_y
-            col = self.color_highlight if (cx < x + hl_px) else self.color_normal
+            col = self.color_highlight if (cx < x + hl_px) else self.color_reading
             self._draw_outline_for_text(painter, cx, cy, ch, a)
             self._draw_blurred_text(painter, cx, cy, ch, col, a * breathe, blur)
             cx += char_w
 
-        # 柔光晕（沿已高亮部分），非霓虹：低透明柔和矩形
+        # 柔光晕：跟随当前读点的一小段，而非已读全长（否则字散了光带还在）
         if self.fx.on_soft and self.glow_enabled and hl_px > 0:
+            if follow_on:
+                ch_w = fm.horizontalAdvance("字")
+                glow_w = ch_w * self.fx.glow_len_chars
+                glow_x = max(0.0, hl_px - glow_w * 0.6)
+            else:
+                glow_x, glow_w = 0.0, hl_px
             painter.save()
             painter.setPen(Qt.NoPen)
             g = QColor(self.color_glow)
             g.setAlpha(int(46 * alpha))
             painter.setBrush(QBrush(g))
             r = self.glow_radius
-            painter.drawRoundedRect(x - r, int(y + 2), int(hl_px) + r * 2, int(line_h - 6), r, r)
+            glow_fy = self.fx.float_offset()
+            painter.drawRoundedRect(x + glow_x - r, int(y + 2 + glow_fy), int(glow_w) + r * 2, int(line_h - 6), r, r)
             painter.restore()
 
-    def _draw_dissolving_line(self, painter, text, y, line_h, elapsed):
-        """上一行退场：从左到右逐字化为羽毛——每个字渐隐 + 向左上漂移 + 羽化。
+    def _draw_reveal_line(self, painter, text, y, elapsed, alpha=1.0):
+        """非当前行（补位进来的预览行）：按"补进窗口"的时刻逐字从雾中浮现。
 
-        与 EffectEngine 里 mode='dissolve' 的羽毛同步（同样的逐字延迟），
-        视觉上就是文字从左边开始一个字一个字散成羽毛飘走。
+        与当前行的 _draw_effect_line 区别在于：不涉及读条高亮/柔光/跟随消散，
+        只做逐字 alpha + 羽化 + 上浮的入场。elapsed 由该行入场时刻算出。
+        """
+        baseline = int(y + self.cfg["font_size"])
+        x = 20.0
+        fm = QFontMetrics(self.font)
+        base_alpha = self.color_normal.alpha() / 255.0
+        for i, ch in enumerate(text):
+            a, blur, rise, float_y = self.fx.char_state(i, elapsed)
+            a = a * alpha * base_alpha
+            if a <= 0.01:
+                x += fm.horizontalAdvance(ch)
+                continue
+            cy = baseline - rise + float_y
+            self._draw_blurred_text(painter, x, cy, ch, self.color_normal, a, blur)
+            x += fm.horizontalAdvance(ch)
+
+    def _draw_follow_tail(self, painter, tail, y):
+        """逐字跟随消散的收尾：上一行还没散完的字，原地继续渐隐 + 羽化。
+
+        tail: [(char, alpha, x), ...]；x 为该字在原行的中心位置（此处只取顺序）。
+        """
+        baseline = int(y + self.cfg["font_size"])
+        x = 20.0
+        fm = QFontMetrics(self.font)
+        for ch, a, _cx in tail:
+            if a > 0.01:
+                self._draw_blurred_text(painter, x, baseline, ch,
+                                        self.color_normal, a, max(1 - a, 0.25))
+            x += fm.horizontalAdvance(ch)
+
+    def _draw_dissolving_line(self, painter, text, y, line_h, elapsed):
+        """上一行退场：从左到右逐字化羽——文字原地渐隐 + 羽化，羽毛向左上飘散。
+
+        文字本身不移动：羽毛从字符原位飞出（mode='dissolve'），文字随羽毛化出
+        而逐渐变淡消失。两者用同样的逐字延迟，形成"字化成羽"的观感。
         """
         if not text:
             return
@@ -537,7 +699,8 @@ class LyricWindow(QWidget):
             return
         w = self.width()
         sweep_x = -w * 0.3 + pos * w * 1.6
-        grad = QLinearGradient(sweep_x, 0, sweep_x + w * 0.25, 0)
+        band_w = w * self.fx.sweep_width
+        grad = QLinearGradient(sweep_x, 0, sweep_x + band_w, 0)
         peak = max(1, int(self.fx.sweep_alpha_max * env))
         grad.setColorAt(0.0, QColor(255, 255, 255, 0))
         grad.setColorAt(0.5, QColor(242, 246, 250, peak))
@@ -644,8 +807,8 @@ class LyricWindow(QWidget):
         x = 20
         baseline = int(y + self.cfg["font_size"])
 
-        # 整行描边底色
-        base_c = QColor(self.color_normal)
+        # 整行描边底色（当前行 = 读行颜色）
+        base_c = QColor(self.color_reading)
         base_c.setAlpha(int(base_c.alpha() * alpha))
         self._draw_outlined_text(painter, x, baseline, text, base_c)
 
@@ -776,15 +939,27 @@ class LyricWindow(QWidget):
         if cyc:
             cyc()
 
+    def _on_settings_applied(self):
+        """设置面板点「应用」后：让新配置立即生效到歌词窗。"""
+        self.apply_config()
+        self._resize_to_content()
+        self._refresh_theme_menu()
+
     def _open_settings(self):
-        dlg = SettingsDialog(
-            self.cfg, self, on_switch_theme=getattr(self, "_switch_theme", None)
-        )
-        if dlg.exec() == QDialog.Accepted:
-            self.apply_config()
-            self._resize_to_content()
-            self._refresh_theme_menu()
-            save_config(self.cfg)
+        # 独立顶层窗口（不设歌词窗为 parent），避免继承 Tool / 点击穿透导致关闭失效。
+        # 保存为成员 + 非模态，窗口可长期开着，边调边看歌词效果。
+        dlg = getattr(self, "_settings_dialog", None)
+        if dlg is None:
+            dlg = SettingsDialog(
+                self.cfg, None,
+                on_switch_theme=getattr(self, "_switch_theme", None),
+                on_apply=self._on_settings_applied,
+            )
+            self._settings_dialog = dlg
+            dlg.destroyed.connect(lambda: setattr(self, "_settings_dialog", None))
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def toggle_visible(self):
         self.setVisible(not self.isVisible())
