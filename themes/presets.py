@@ -98,10 +98,53 @@ NEON = {
     },
 }
 
+# ---------------- 雾中飞羽：电影感空灵特效（月白/雾灰/淡蓝）----------------
+MIST = {
+    "label": "雾中飞羽",
+    "icon": "❧",
+    "desc": "月白雾灰间，羽毛缓缓浮现又消散——空灵、安静、自由",
+    "params": {
+        "font_family": "Microsoft YaHei",
+        "font_size": 31,
+        "font_bold": False,
+        "color_normal": "#9FAEBD",          # 雾灰
+        "color_highlight": "#F2F6FA",       # 月白
+        "color_translated": "#8B9AA9",      # 淡蓝灰
+        "color_glow": "#C7D8E8",            # 银白微光（非霓虹）
+        "glow_enabled": True,
+        "glow_radius": 9,
+        "outline_width": 2,                 # 细描边，避免廉价感
+        "line_spacing": 18,
+        "opacity": 0.93,
+        "show_translation": True,
+        "ambient": False,                   # 关掉旧雨滴，改用羽毛特效
+        "ambient_density": 0,
+        "ambient_color": "#DCE6F1",
+        "accent_line": False,
+    },
+    # 该主题专属的特效参数（合并进 cfg['fx']）
+    "fx": {
+        "enabled": True,
+        "feather_color": "#DCE6F1",
+        "mist_color": "#B7C6D8",
+        "char_reveal": True,
+        "feathers": True,
+        "far_feathers": True,
+        "motes": True,
+        "mist_flow": True,
+        "breathing": True,
+        "float": True,
+        "light_sweep": True,
+        "crossfade": True,
+        "soft_glow": True,
+    },
+}
+
 THEMES = {
     "classic": CLASSIC,
     "melancholy": MELANCHOLY,
     "neon": NEON,
+    "mist": MIST,
 }
 
 DEFAULT_THEME = "classic"
@@ -117,9 +160,16 @@ def theme_list():
 
 
 def apply_theme(cfg, name):
-    """把主题参数覆盖进 cfg，并设置 cfg['theme']。返回 cfg。"""
+    """把主题参数覆盖进 cfg，并设置 cfg['theme']。返回 cfg。
+
+    若主题定义了 ``fx`` 子字典，则合并进 cfg['fx']（未列出的键保持原值），
+    让不同主题自带契合的特效配置。
+    """
     theme = get_theme(name)
     for key, value in theme["params"].items():
         cfg[key] = deepcopy(value)
+    if "fx" in theme:
+        fx = cfg.setdefault("fx", {})
+        fx.update(deepcopy(theme["fx"]))
     cfg["theme"] = name if name in THEMES else DEFAULT_THEME
     return cfg

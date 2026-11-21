@@ -10,12 +10,13 @@ from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 from PySide6.QtWidgets import QWidget, QMenu, QApplication
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetrics, QBrush,
-    QPen, QPainterPath,
+    QPen, QPainterPath, QLinearGradient,
 )
 
 from core.config import save_config
 from core.lyrics import get_lyrics
 from ui.hotkey import set_click_through
+from ui.effects import EffectEngine
 
 
 class RainDrop:
@@ -57,6 +58,14 @@ class LyricWindow(QWidget):
         self._ambient_timer = QTimer(self)
         self._ambient_timer.timeout.connect(self._step_ambient)
 
+        # 雾中飞羽特效引擎 + 独立动画时钟
+        self.fx = EffectEngine(cfg)
+        self._fx_timer = QTimer(self)
+        self._fx_timer.timeout.connect(self._step_fx)
+        self._fx_last_tick = 0
+        self._line_row_y = 24
+        self._line_h = 40
+
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
@@ -70,6 +79,20 @@ class LyricWindow(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_lyric)
         self.timer.start(self.cfg.get("refresh_ms", 80))
+        # 特效动画帧：~30fps，独立于歌词刷新（_step_fx 在 __init__ 已连接）
+        import time as _time
+        self._fx_last_tick = _time.monotonic()
+        self._fx_timer.start(33)
+
+    def _step_fx(self):
+        """特效帧：推进粒子/时钟，触发重绘。"""
+        import time as _time
+        now = _time.monotonic()
+        dt = (now - self._fx_last_tick) * 1000
+        self._fx_last_tick = now
+        if self.fx.enabled:
+            self.fx.tick(dt, self.width(), self.height())
+            self.update()
 
     def _init_position(self):
         pos = self.cfg.get("position", {})
@@ -100,6 +123,8 @@ class LyricWindow(QWidget):
         # 显示行数与行号
         self.visible_lines = max(1, min(8, int(self.cfg.get("visible_lines", 4))))
         self.show_line_number = self.cfg.get("show_line_number", True)
+        # 特效引擎重读配置
+        self.fx.configure(self.cfg)
         self.click_through = self.cfg.get("click_through", True)
         self.locked = self.cfg.get("locked", True)
         # 主题专属
@@ -176,6 +201,10 @@ class LyricWindow(QWidget):
                 lo = mid + 1
             else:
                 hi = mid - 1
+        # 行切换 -> 触发入场/退场动画与羽毛
+        if idx != self.current_index and idx >= 0:
+            prev_text = self.lines[self.current_index][1] if 0 <= self.current_index < len(self.lines) else ""
+            self.fx.on_line_changed(idx, self._line_row_y, self._line_h, prev_text=prev_text)
         self.current_index = idx
         self.update()
 
@@ -196,7 +225,13 @@ class LyricWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
 
-        # 氛围粒子在最底层
+        fx_on = self.fx.enabled
+        w, h = self.width(), self.height()
+
+        # ---- 特效背景层：雾气流动 + 远景羽毛 ----
+        if fx_on:
+            self.fx.draw_background(painter, w, h)
+        # 氛围雨滴（忧郁主题，与特效互斥但两者都开也共存无妨）
         if self.ambient and self._rain:
             self._draw_rain(painter)
 
@@ -211,12 +246,20 @@ class LyricWindow(QWidget):
         idx = max(0, self.current_index)
         line_h = self.cfg["font_size"] + self.line_spacing
         visible = self.visible_lines
-        # 当前行尽量靠上（约第2行），随可见行数增多略微下移，兼顾上下文与预告
         anchor = min(1, max(0, visible - 1))
         start = max(0, idx - anchor)
-        # 避免尾部行数不足时窗口下方留白过多
         start = min(start, max(0, len(self.lines) - visible))
         y_base = 24
+        self._line_row_y = y_base + anchor * line_h
+        self._line_h = line_h
+
+        # ---- 特效：上一行交叠退场 ----
+        if fx_on:
+            prev = self.fx.prev_line_state()
+            if prev:
+                p_text, p_y, p_h, p_alpha, p_blur, p_spread = prev
+                if p_alpha > 0:
+                    self._draw_fading_line(painter, p_text, p_y, p_h, p_alpha, p_blur, p_spread)
 
         for i in range(start, min(len(self.lines), start + visible)):
             ms, text = self.lines[i]
@@ -224,10 +267,16 @@ class LyricWindow(QWidget):
             y = y_base + row * line_h
 
             if i == self.current_index:
-                # 当前行左侧强调竖线（忧郁主题）
                 if self.accent_line:
                     self._draw_accent_line(painter, y, line_h)
-                self._draw_highlight_line(painter, text, y, line_h)
+                if fx_on:
+                    elapsed = self.fx.time_ms - self.fx.line_start_ms
+                    self._draw_effect_line(painter, text, y, line_h, elapsed)
+                    # 微光呼吸：整体亮度轻微波动
+                    if self.fx.on_breath:
+                        pass  # 呼吸已并入逐字 alpha，避免重复叠加
+                else:
+                    self._draw_highlight_line(painter, text, y, line_h)
                 if self.show_translation and self.translated:
                     trans_text = self._find_translation(ms)
                     if trans_text:
@@ -243,12 +292,133 @@ class LyricWindow(QWidget):
                     painter, 20, int(y + self.cfg["font_size"]), text, self.color_normal
                 )
 
-        # 右上角行号：当前行 / 总行数
+        # ---- 特效前景层：微粒 + 近景羽毛 + 扫光 ----
+        if fx_on:
+            self.fx.draw_foreground(painter, w, h)
+            sweep = self.fx.sweep_pos()
+            if sweep >= 0:
+                cy = y_base + anchor * line_h
+                self._draw_sweep(painter, cy, line_h, sweep)
+
         if self.show_line_number:
             self._draw_line_number(painter, idx)
 
         if not self.locked:
             self._draw_unlock_indicator(painter)
+
+    # ---------- 雾中飞羽 · 特效绘制 ----------
+    def _draw_blurred_text(self, painter, x, y, text, color, alpha=1.0, blur=0.0):
+        """用多层微偏移半透明绘制模拟"从雾中浮现"的羽化（Canvas shadowBlur 的等价）。
+
+        blur=0 时只画一次（清晰），blur 越大层数与偏移越多、单层越淡。
+        """
+        if alpha <= 0:
+            return
+        c = QColor(color)
+        c.setAlpha(int(max(0, min(1, alpha)) * 255))
+        if blur <= 0.02:
+            self._fill_text_path(painter, x, y, text, c)
+            return
+        # 羽化：3-5 层，偏移随 blur 增大，权重递减；中心层最清晰
+        layers = 4
+        max_off = self.fx.blur_max * blur
+        painter.save()
+        for k in range(layers):
+            t = k / max(1, layers - 1)
+            off = max_off * (t - 0.5) * 2
+            layer_c = QColor(c)
+            layer_c.setAlpha(int(c.alpha() * (0.12 + 0.22 * (1 - t))))
+            self._fill_text_path(painter, x + off, y + off * 0.25, text, layer_c)
+        # 中心清晰层
+        center = QColor(c)
+        center.setAlpha(int(c.alpha() * (0.55 + 0.45 * (1 - blur))))
+        self._fill_text_path(painter, x, y, text, center)
+        painter.restore()
+
+    def _fill_text_path(self, painter, x, y, text, color):
+        path = QPainterPath()
+        path.addText(x, y, self.font, text)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(color))
+        painter.drawPath(path)
+
+    def _draw_outline_for_text(self, painter, x, y, text, alpha=1.0):
+        """柔光描边：极细、低透明，绝不做霓虹描边。"""
+        if not self.fx.on_soft or self.outline_width <= 0:
+            return
+        path = QPainterPath()
+        path.addText(x, y, self.font, text)
+        pen = QColor(0, 0, 0)
+        pen.setAlpha(int(150 * alpha))
+        painter.setPen(QPen(pen, max(1, self.outline_width - 1), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+
+    def _draw_effect_line(self, painter, text, y, line_h, elapsed):
+        """当前行：逐字从雾中浮现 + 上浮 + 柔光 + 高亮进度填充。"""
+        baseline = int(y + self.cfg["font_size"])
+        x = 20
+        fm = QFontMetrics(self.font)
+        # 先按进度算出整行高亮宽度（沿用逐字填充语义）
+        state = self.monitor.snapshot()
+        pos_ms = state.get("position_ms", 0)
+        cur_ms = self.lines[self.current_index][0] if self.current_index >= 0 else 0
+        next_ms = (self.lines[self.current_index + 1][0]
+                   if self.current_index + 1 < len(self.lines) else cur_ms + 3000)
+        progress = max(0.0, min(1.0, (pos_ms - cur_ms) / (next_ms - cur_ms))) if next_ms > cur_ms else 0.0
+        total_w = fm.horizontalAdvance(text)
+        hl_px = total_w * progress
+
+        breathe = self.fx.breathe()
+        cx = x
+        for i, ch in enumerate(text):
+            a, blur, rise, float_y = self.fx.char_state(i, elapsed)
+            if a <= 0:
+                cx += fm.horizontalAdvance(ch)
+                continue
+            char_w = fm.horizontalAdvance(ch)
+            cy = baseline - rise + float_y
+            col = self.color_highlight if (cx < x + hl_px) else self.color_normal
+            self._draw_outline_for_text(painter, cx, cy, ch, a)
+            self._draw_blurred_text(painter, cx, cy, ch, col, a * breathe, blur)
+            cx += char_w
+
+        # 柔光晕（沿已高亮部分），非霓虹：低透明柔和矩形
+        if self.fx.on_soft and self.glow_enabled and hl_px > 0:
+            painter.save()
+            painter.setPen(Qt.NoPen)
+            g = QColor(self.color_glow)
+            g.setAlpha(46)
+            painter.setBrush(QBrush(g))
+            r = self.glow_radius
+            painter.drawRoundedRect(x - r, int(y + 2), int(hl_px) + r * 2, int(line_h - 6), r, r)
+            painter.restore()
+
+    def _draw_fading_line(self, painter, text, y, line_h, alpha, blur, spread):
+        """上一行交叠退场：渐隐 + 羽化扩散。"""
+        if alpha <= 0:
+            return
+        painter.save()
+        offset = -spread
+        self._draw_blurred_text(
+            painter, 20 + offset, int(y + self.cfg["font_size"] + offset),
+            text, self.color_normal, alpha, max(blur, 0.3)
+        )
+        painter.restore()
+
+    def _draw_sweep(self, painter, y, line_h, pos):
+        """轻微光线扫过文字：一条低透明斜向高光，随时间循环。"""
+        w = self.width()
+        sweep_x = -w * 0.3 + pos * w * 1.6
+        grad = QLinearGradient(sweep_x, 0, sweep_x + w * 0.25, 0)
+        grad.setColorAt(0.0, QColor(255, 255, 255, 0))
+        grad.setColorAt(0.5, QColor(242, 246, 250, 28))
+        grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(grad))
+        painter.drawRect(0, int(y), w, int(line_h))
+        painter.restore()
 
     def _draw_line_number(self, painter, idx):
         """在窗口右上角绘制「当前行 / 总行数」。"""

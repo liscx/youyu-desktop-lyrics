@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""设置面板。"""
+"""设置面板：外观 + 雾中飞羽特效两页。"""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QLabel, QComboBox, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QSlider, QCheckBox, QFontComboBox, QSpinBox,
-    QColorDialog,
+    QColorDialog, QTabWidget, QWidget, QGroupBox, QGridLayout,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 
 from themes import theme_list, get_theme
+from core.config import FX_DEFAULTS
 
 
 def color_dialog_button(parent, color, callback):
@@ -41,35 +42,61 @@ class SettingsDialog(QDialog):
         self.cfg = cfg
         self.on_switch_theme = on_switch_theme
         self.setWindowTitle("桌面歌词 - 设置")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self._suppress_theme_change = False
         self._build_ui()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        self.fx_cfg = dict(self.cfg.get("fx", FX_DEFAULTS))
 
-        # ---- 主题选择（置顶，最显眼）----
+        tabs = QTabWidget()
+        tabs.addTab(self._build_appearance_tab(), "外观")
+        tabs.addTab(self._build_effects_tab(), "雾中飞羽 · 特效")
+        root.addWidget(tabs)
+
+        tip = QLabel(
+            "Ctrl+Alt+T 轮换主题 · Ctrl+Alt+L 解锁拖动 · Ctrl+Alt+H 显示/隐藏"
+        )
+        tip.setStyleSheet("color:#888;font-size:11px;")
+        tip.setAlignment(Qt.AlignCenter)
+        root.addWidget(tip)
+
+        buttons = QHBoxLayout()
+        ok = QPushButton("确定")
+        ok.clicked.connect(self._apply)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(self.reject)
+        buttons.addStretch()
+        buttons.addWidget(ok)
+        buttons.addWidget(cancel)
+        root.addLayout(buttons)
+
+    # ---------------- 外观页 ----------------
+    def _build_appearance_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        # 主题选择置顶
         theme_row = QHBoxLayout()
         theme_row.addWidget(QLabel("外观主题"))
         self.theme_combo = QComboBox()
         for key, label, icon_char, desc in theme_list():
             self.theme_combo.addItem(f"{icon_char}  {label}", userData=key)
             self.theme_combo.setItemData(self.theme_combo.count() - 1, desc, Qt.ToolTipRole)
-        cur = self.cfg.get("theme", "classic")
-        idx = self.theme_combo.findData(cur)
+        idx = self.theme_combo.findData(self.cfg.get("theme", "classic"))
         if idx >= 0:
             self.theme_combo.setCurrentIndex(idx)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         theme_row.addWidget(self.theme_combo, 1)
         layout.addLayout(theme_row)
 
-        self.theme_desc = QLabel(get_theme(cur)["desc"])
+        self.theme_desc = QLabel(get_theme(self.cfg.get("theme", "classic"))["desc"])
         self.theme_desc.setStyleSheet("color:#7BA7D7;font-size:11px;padding:2px 0 8px 0;")
         self.theme_desc.setWordWrap(True)
         layout.addWidget(self.theme_desc)
 
-        # ---- 详细外观 ----
         form = QFormLayout()
         self.font_combo = QFontComboBox()
         self.font_combo.setCurrentFont(QFont(self.cfg["font_family"]))
@@ -86,20 +113,16 @@ class SettingsDialog(QDialog):
 
         self.normal_btn = color_dialog_button(self, self.cfg["color_normal"], lambda c: None)
         form.addRow("普通歌词颜色", self.normal_btn)
-
         self.highlight_btn = color_dialog_button(self, self.cfg["color_highlight"], lambda c: None)
         form.addRow("高亮颜色", self.highlight_btn)
-
         self.translate_btn = color_dialog_button(self, self.cfg["color_translated"], lambda c: None)
         form.addRow("翻译颜色", self.translate_btn)
-
         self.glow_btn = color_dialog_button(self, self.cfg["color_glow"], lambda c: None)
         form.addRow("光晕颜色", self.glow_btn)
 
         self.glow_check = QCheckBox("启用高亮光晕")
         self.glow_check.setChecked(self.cfg["glow_enabled"])
         form.addRow("", self.glow_check)
-
         self.trans_check = QCheckBox("显示翻译歌词")
         self.trans_check.setChecked(self.cfg["show_translation"])
         form.addRow("", self.trans_check)
@@ -125,27 +148,91 @@ class SettingsDialog(QDialog):
         form.addRow("", self.lineno_check)
 
         layout.addLayout(form)
+        return page
 
-        tip = QLabel(
-            "提示：选择主题会套用整套配色与氛围，可再手动微调。\n"
-            "Ctrl+Alt+T 快速轮换主题 · Ctrl+Alt+L 解锁拖动 · Ctrl+Alt+H 显示/隐藏。"
-        )
-        tip.setStyleSheet("color:#888;font-size:11px;")
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
+    # ---------------- 特效页 ----------------
+    def _mk_slider(self, key, label, lo, hi, scale=1):
+        s = QSlider(Qt.Horizontal)
+        s.setRange(lo, hi)
+        val = self.fx_cfg.get(key, FX_DEFAULTS[key])
+        s.setValue(int(val * scale) if scale != 1 else int(val))
+        s.setObjectName(key)
+        return s, label
 
-        buttons = QHBoxLayout()
-        ok = QPushButton("确定")
-        ok.clicked.connect(self._apply)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch()
-        buttons.addWidget(ok)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+    def _build_effects_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        fx = self.fx_cfg
 
+        self.fx_enabled = QCheckBox("启用「雾中飞羽」特效（总开关）")
+        self.fx_enabled.setChecked(fx.get("enabled", True))
+        layout.addWidget(self.fx_enabled)
+
+        # 各动画独立开关（两列网格）
+        sw_group = QGroupBox("动画模块（独立开关）")
+        grid = QGridLayout()
+        switches = [
+            ("char_reveal", "逐字浮现"), ("feathers", "羽毛漂浮"),
+            ("far_feathers", "远景羽毛"), ("motes", "微粒漂浮"),
+            ("mist_flow", "雾气流动"), ("breathing", "微光呼吸"),
+            ("float", "整体浮动"), ("light_sweep", "光线扫过"),
+            ("crossfade", "行切换交叠"), ("soft_glow", "文字柔光"),
+            ("feather_on_enter", "入场羽毛"), ("feather_on_exit", "退场羽毛"),
+        ]
+        self.fx_switches = {}
+        for i, (key, label) in enumerate(switches):
+            cb = QCheckBox(label)
+            cb.setChecked(fx.get(key, FX_DEFAULTS[key]))
+            self.fx_switches[key] = cb
+            grid.addWidget(cb, i // 2, i % 2)
+        sw_group.setLayout(grid)
+        layout.addWidget(sw_group)
+
+        # 关键参数（时间/强度/距离/数量）
+        p_group = QGroupBox("参数调节")
+        pform = QFormLayout()
+        self.fx_sliders = {}
+
+        def add_int(key, label, lo, hi):
+            s = QSlider(Qt.Horizontal)
+            s.setRange(lo, hi)
+            s.setValue(int(fx.get(key, FX_DEFAULTS[key])))
+            pform.addRow(f"{label} ({s.value()})", s)
+            self.fx_sliders[key] = s
+            return s
+
+        add_int("fade_in_ms", "入场时长(ms)", 200, 2500)
+        add_int("fade_out_ms", "退场时长(ms)", 200, 2000)
+        add_int("char_stagger_ms", "逐字延迟(ms)", 0, 200)
+        add_int("rise_px", "上浮距离(px)", 0, 30)
+        add_int("float_px", "浮动幅度(px)", 0, 12)
+        add_int("blur_max", "羽化程度", 0, 12)
+        add_int("breath_pct", "呼吸幅度(%)", 0, 40)
+        add_int("mist_alpha", "雾气浓度", 0, 80)
+        add_int("feather_count", "羽毛数量", 0, 30)
+        add_int("mote_count", "微粒数量", 0, 50)
+        p_group.setLayout(pform)
+        layout.addWidget(p_group)
+
+        # 缓动曲线
+        ease_row = QHBoxLayout()
+        ease_row.addWidget(QLabel("缓动曲线"))
+        self.fx_ease = QComboBox()
+        for k, label in (("ease_out", "浮现（快起慢收）"), ("ease_in_out", "平滑"),
+                         ("ease_in", "消散（慢起快收）"), ("linear", "线性")):
+            self.fx_ease.addItem(label, userData=k)
+        ei = self.fx_ease.findData(fx.get("easing", "ease_out"))
+        if ei >= 0:
+            self.fx_ease.setCurrentIndex(ei)
+        ease_row.addWidget(self.fx_ease, 1)
+        layout.addLayout(ease_row)
+
+        layout.addStretch()
+        return page
+
+    # ---------------- 同步 / 应用 ----------------
     def _sync_controls_from_cfg(self):
-        """主题切换后，用新 cfg 刷新各微调控件。"""
+        """主题切换后，用新 cfg 刷新各控件（含 fx）。"""
         self._suppress_theme_change = True
         self.font_combo.setCurrentFont(QFont(self.cfg["font_family"]))
         self.size_spin.setValue(self.cfg["font_size"])
@@ -169,6 +256,17 @@ class SettingsDialog(QDialog):
         self.spacing_spin.setValue(self.cfg["line_spacing"])
         self.visible_spin.setValue(self.cfg.get("visible_lines", 4))
         self.lineno_check.setChecked(self.cfg.get("show_line_number", True))
+
+        # fx 同步（主题可能改了 fx）
+        self.fx_cfg = dict(self.cfg.get("fx", FX_DEFAULTS))
+        self.fx_enabled.setChecked(self.fx_cfg.get("enabled", True))
+        for key, cb in self.fx_switches.items():
+            cb.setChecked(self.fx_cfg.get(key, FX_DEFAULTS[key]))
+        for key, s in self.fx_sliders.items():
+            s.setValue(int(self.fx_cfg.get(key, FX_DEFAULTS[key])))
+        ei = self.fx_ease.findData(self.fx_cfg.get("easing", "ease_out"))
+        if ei >= 0:
+            self.fx_ease.setCurrentIndex(ei)
         self._suppress_theme_change = False
 
     def _on_theme_changed(self):
@@ -177,7 +275,6 @@ class SettingsDialog(QDialog):
         key = self.theme_combo.currentData()
         if not key:
             return
-        # 立即应用主题（回调会改 cfg、重绘窗口），再同步控件显示
         if self.on_switch_theme:
             self.on_switch_theme(key, save=False)
         self.theme_desc.setText(get_theme(key)["desc"])
@@ -199,4 +296,12 @@ class SettingsDialog(QDialog):
             "visible_lines": self.visible_spin.value(),
             "show_line_number": self.lineno_check.isChecked(),
         })
+        # 收集 fx 参数
+        fx = self.cfg.setdefault("fx", dict(FX_DEFAULTS))
+        fx["enabled"] = self.fx_enabled.isChecked()
+        for key, cb in self.fx_switches.items():
+            fx[key] = cb.isChecked()
+        for key, s in self.fx_sliders.items():
+            fx[key] = s.value()
+        fx["easing"] = self.fx_ease.currentData()
         self.accept()
