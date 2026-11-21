@@ -104,6 +104,15 @@ self.fx.sweep_alpha(pos)                       # 扫光亮度包络 0..1（边�
 - **参数**：`fx.float`（开关）、`fx.float_px`（3）、`fx.float_ms`（5200）。
 - **调用**：`char_state()`。
 
+### 13. 消失后补位（三种模式，歌词窗布局层）
+- **作用**：控制歌词唱完消失后，剩余歌词如何补位——这是布局策略，不属于粒子特效。
+- **模式**（配置 `refill_mode`）：
+  - `batch` **整批补位**（默认）：窗口显示 `read_lines` 行一批；唱过的行化羽消失后留空、不再驻留；整批唱完后由 `on_batch_change()` 制造 `batch_gap_ms` 空窗，再随 `fade_in_ms` 整批淡入。实现见歌词窗 `_compute_layout()` / `fx.batch_alpha()`。
+  - `slot` **原位替换**：固定 `read_lines` 个行位，唱完的行位立即由 `_update_slots()` 补入下一句，其余行不动。
+  - `shift` **逐行上移**：原有行为，当前行固定在第 2 行、整窗上移。
+- **参数**：`refill_mode`、`read_lines`（1-8）、`fx.batch_gap_ms`（220）。
+- **调用**：歌词窗 `update_lyric()` 触发模式状态更新，`paintEvent()` 经 `_compute_layout()` 取布局绘制。
+
 ## 三、配置总表
 
 全部参数在 `core/config.py` 的 `FX_DEFAULTS`，运行时在 `config.json` 的 `fx` 段。

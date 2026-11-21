@@ -28,6 +28,7 @@ FX_DEFAULTS = {
     "sweep_ms": 4200,            # 扫光周期(ms)
     "sweep_alpha": 34,           # 光条峰值透明度(0-80)
     "sweep_fade_start": 55,      # 光条从 55% 处开始渐隐(0-95)，到右边界归零，避免硬切
+    "batch_gap_ms": 220,         # 整批补位时上一批完全消失到下一批出现的间隔(ms)
     # 逐字化羽消散：歌词消失时从左到右化为羽毛，向左上方飘散
     "word_dissolve": True,       # 逐字消散（关闭则退回整行渐隐）
     "dissolve_char_ms": 360,     # 单个字化羽时长(ms)
@@ -80,6 +81,8 @@ DEFAULTS = {
     "line_spacing": 12,
     "visible_lines": 4,          # 歌词窗同时显示的行数（1-8）
     "show_line_number": False,   # 右上角显示 当前行/总行数（默认关闭）
+    "read_lines": 2,             # 读条批大小：整批补位一次显示几行 / 原位替换占几个固定行(1-8)
+    "refill_mode": "batch",      # 消失后补位方式: batch=唱完消失+整批补位 / slot=原位替换 / shift=逐行上移
     "opacity": 0.92,
     # 主题专属开关
     "ambient": False,          # 氛围粒子（忧郁主题 = 雨滴）

@@ -66,6 +66,12 @@ class LyricWindow(QWidget):
         self._fx_last_tick = 0
         self._line_row_y = 24
         self._line_h = 40
+        # 补位模式状态
+        self.refill_mode = "batch"
+        self.read_lines = 2
+        self._slot_lines = []      # slot 模式：每个固定行位当前显示的行索引
+        self._next_line = 0        # slot 模式：下一个待补入的行索引
+        self._last_layout = []     # 上一帧布局，用于定位正在消散的行
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -124,6 +130,11 @@ class LyricWindow(QWidget):
         # 显示行数与行号
         self.visible_lines = max(1, min(8, int(self.cfg.get("visible_lines", 4))))
         self.show_line_number = self.cfg.get("show_line_number", True)
+        # 补位模式：batch=唱完消失+整批补位 / slot=原位替换 / shift=逐行上移
+        self.refill_mode = self.cfg.get("refill_mode", "batch")
+        if self.refill_mode not in ("batch", "slot", "shift"):
+            self.refill_mode = "batch"
+        self.read_lines = max(1, min(8, int(self.cfg.get("read_lines", 2))))
         # 特效引擎重读配置
         self.fx.configure(self.cfg)
         self.click_through = self.cfg.get("click_through", True)
@@ -168,6 +179,67 @@ class LyricWindow(QWidget):
         hwnd = int(self.winId())
         set_click_through(hwnd, enabled)
 
+    # ---------- 补位模式：布局与状态 ----------
+    def _line_h_px(self):
+        return self.cfg["font_size"] + self.line_spacing
+
+    def _row_y(self, row):
+        return 24 + row * self._line_h_px()
+
+    def _prev_row_y(self, idx):
+        """上一帧布局里 idx 所在行的 y；找不到则回退到当前行上方。"""
+        for line_index, row in self._last_layout:
+            if line_index == idx:
+                return self._row_y(row)
+        return self._row_y(max(0, getattr(self, "_cur_row", 1) - 1))
+
+    def _reset_refill_state(self):
+        """换歌时重置补位状态。"""
+        self._slot_lines = []
+        self._next_line = 0
+        self._last_layout = []
+        self._cur_row = 0
+        self.fx._batch_change_ms = -1
+
+    def _update_slots(self, prev_idx, idx):
+        """slot（原位替换）：刚唱完的行位立即补入下一句歌词。"""
+        n = len(self.lines)
+        if not self._slot_lines or idx not in self._slot_lines and prev_idx not in self._slot_lines:
+            self._slot_lines = [i for i in range(idx, min(n, idx + self.read_lines))]
+            while len(self._slot_lines) < self.read_lines:
+                self._slot_lines.append(-1)
+            self._next_line = idx + self.read_lines
+            return
+        if prev_idx in self._slot_lines:
+            pos = self._slot_lines.index(prev_idx)
+            if self._next_line < n:
+                self._slot_lines[pos] = self._next_line
+                self._next_line += 1
+            else:
+                self._slot_lines[pos] = -1
+
+    def _compute_layout(self, idx):
+        """返回 ([(line_index, row), ...], cur_row)。决定每帧显示哪些行、在哪一行。"""
+        n = len(self.lines)
+        mode = self.refill_mode
+        if mode == "batch":
+            # 整批补位：一批 read_lines 行，唱过的行留空，整批唱完才换新批
+            size = self.read_lines
+            bstart = (idx // size) * size
+            items = [(i, i - bstart) for i in range(bstart, min(n, bstart + size))]
+            return items, idx - bstart
+        if mode == "slot":
+            items = [(li, r) for r, li in enumerate(self._slot_lines) if 0 <= li < n]
+            cur_row = self._slot_lines.index(idx) if idx in self._slot_lines else 0
+            return items, cur_row
+        # shift（逐行上移，原有行为）
+        visible = self.visible_lines
+        anchor = min(1, max(0, visible - 1))
+        start = max(0, idx - anchor)
+        start = min(start, max(0, n - visible))
+        items = [(i, i - start) for i in range(start, min(n, start + visible))]
+        return items, anchor
+
     # ---------- 歌词更新 ----------
     def update_lyric(self):
         self.monitor.poll()  # 主线程轮询（后台线程 ctypes 回调会持有 GIL 阻塞 Qt 事件循环）
@@ -186,6 +258,7 @@ class LyricWindow(QWidget):
             self.lines = result["lines"]
             self.translated = result["translated"] if self.show_translation else []
             self.current_index = -1
+            self._reset_refill_state()
             self._resize_to_content()
 
         if not self.lines:
@@ -204,9 +277,17 @@ class LyricWindow(QWidget):
                 hi = mid - 1
         # 行切换 -> 触发入场/退场动画与羽毛
         if idx != self.current_index and idx >= 0:
-            prev_text = self.lines[self.current_index][1] if 0 <= self.current_index < len(self.lines) else ""
+            prev_idx = self.current_index
+            # slot 模式：刚唱完的行位补入下一句
+            if self.refill_mode == "slot":
+                self._update_slots(prev_idx, idx)
+            # batch 模式：跨批次 -> 整批换新，制造空窗+淡入
+            if (self.refill_mode == "batch" and prev_idx >= 0
+                    and (prev_idx // self.read_lines) != (idx // self.read_lines)):
+                self.fx.on_batch_change()
+            prev_text = self.lines[prev_idx][1] if 0 <= prev_idx < len(self.lines) else ""
             prev_char_xs = []
-            prev_row_y = self._line_row_y
+            prev_row_y = self._prev_row_y(prev_idx) if prev_text else self._line_row_y
             if prev_text:
                 # 逐字化羽：算出旧行每个字符的中心 x，让羽毛从字原位化出
                 fm = QFontMetrics(self.font)
@@ -215,7 +296,6 @@ class LyricWindow(QWidget):
                     cw = fm.horizontalAdvance(ch)
                     prev_char_xs.append(cx + cw / 2.0)
                     cx += cw
-                prev_row_y = self._line_row_y - (self.cfg["font_size"] + self.line_spacing)
             self.fx.on_line_changed(idx, self._line_row_y, self._line_h,
                                     prev_text=prev_text, prev_char_xs=prev_char_xs,
                                     prev_row_y=prev_row_y)
@@ -225,7 +305,10 @@ class LyricWindow(QWidget):
     def _resize_to_content(self):
         if not self.lines:
             return
-        n = min(len(self.lines), self.visible_lines)
+        if self.refill_mode in ("batch", "slot"):
+            n = min(len(self.lines), self.read_lines)
+        else:
+            n = min(len(self.lines), self.visible_lines)
         line_h = self.cfg["font_size"] + self.line_spacing
         h = 40 + n * line_h + (20 if self.translated else 0)
         w = self.cfg.get("width", 1000)
@@ -259,13 +342,15 @@ class LyricWindow(QWidget):
 
         idx = max(0, self.current_index)
         line_h = self.cfg["font_size"] + self.line_spacing
-        visible = self.visible_lines
-        anchor = min(1, max(0, visible - 1))
-        start = max(0, idx - anchor)
-        start = min(start, max(0, len(self.lines) - visible))
+        layout, cur_row = self._compute_layout(idx)
+        self._cur_row = cur_row
+        self._last_layout = layout
         y_base = 24
-        self._line_row_y = y_base + anchor * line_h
+        self._line_row_y = y_base + cur_row * line_h
         self._line_h = line_h
+
+        # batch 模式的整批淡入：空窗期内新批次整体不显示
+        batch_a = self.fx.batch_alpha() if fx_on and self.refill_mode == "batch" else 1.0
 
         # ---- 特效：上一行交叠退场（逐字化羽 / 整行淡出）----
         if fx_on:
@@ -279,23 +364,21 @@ class LyricWindow(QWidget):
                 elif p_alpha > 0:
                     self._draw_fading_line(painter, p_text, p_y, p_h, p_alpha, p_blur, p_spread)
 
-        for i in range(start, min(len(self.lines), start + visible)):
-            ms, text = self.lines[i]
-            row = i - start
+        for line_index, row in layout:
+            ms, text = self.lines[line_index]
             y = y_base + row * line_h
-
-            if i == self.current_index:
+            # 整批补位：已唱过的行不再驻留显示（已化羽消散），只留空位
+            if self.refill_mode == "batch" and line_index < idx:
+                continue
+            if line_index == idx:
                 if self.accent_line:
                     self._draw_accent_line(painter, y, line_h)
                 if fx_on:
                     elapsed = self.fx.time_ms - self.fx.line_start_ms
-                    self._draw_effect_line(painter, text, y, line_h, elapsed)
-                    # 微光呼吸：整体亮度轻微波动
-                    if self.fx.on_breath:
-                        pass  # 呼吸已并入逐字 alpha，避免重复叠加
+                    self._draw_effect_line(painter, text, y, line_h, elapsed, alpha=batch_a)
                 else:
-                    self._draw_highlight_line(painter, text, y, line_h)
-                if self.show_translation and self.translated:
+                    self._draw_highlight_line(painter, text, y, line_h, alpha=batch_a)
+                if batch_a > 0 and self.show_translation and self.translated:
                     trans_text = self._find_translation(ms)
                     if trans_text:
                         p = QFont(self.font)
@@ -306,8 +389,10 @@ class LyricWindow(QWidget):
                         painter.setFont(self.font)
             else:
                 painter.setFont(self.font)
+                c = QColor(self.color_normal)
+                c.setAlpha(int(c.alpha() * batch_a))
                 self._draw_outlined_text(
-                    painter, 20, int(y + self.cfg["font_size"]), text, self.color_normal
+                    painter, 20, int(y + self.cfg["font_size"]), text, c
                 )
 
         # ---- 特效前景层：微粒 + 近景羽毛 + 扫光 ----
@@ -315,8 +400,7 @@ class LyricWindow(QWidget):
             self.fx.draw_foreground(painter, w, h)
             sweep = self.fx.sweep_pos()
             if sweep >= 0:
-                cy = y_base + anchor * line_h
-                self._draw_sweep(painter, cy, line_h, sweep)
+                self._draw_sweep(painter, self._line_row_y, line_h, sweep)
 
         if self.show_line_number:
             self._draw_line_number(painter, idx)
@@ -372,7 +456,7 @@ class LyricWindow(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(path)
 
-    def _draw_effect_line(self, painter, text, y, line_h, elapsed):
+    def _draw_effect_line(self, painter, text, y, line_h, elapsed, alpha=1.0):
         """当前行：逐字从雾中浮现 + 上浮 + 柔光 + 高亮进度填充。"""
         baseline = int(y + self.cfg["font_size"])
         x = 20
@@ -387,7 +471,7 @@ class LyricWindow(QWidget):
         total_w = fm.horizontalAdvance(text)
         hl_px = total_w * progress
 
-        breathe = self.fx.breathe()
+        breathe = self.fx.breathe() * alpha
         cx = x
         for i, ch in enumerate(text):
             a, blur, rise, float_y = self.fx.char_state(i, elapsed)
@@ -406,7 +490,7 @@ class LyricWindow(QWidget):
             painter.save()
             painter.setPen(Qt.NoPen)
             g = QColor(self.color_glow)
-            g.setAlpha(46)
+            g.setAlpha(int(46 * alpha))
             painter.setBrush(QBrush(g))
             r = self.glow_radius
             painter.drawRoundedRect(x - r, int(y + 2), int(hl_px) + r * 2, int(line_h - 6), r, r)
@@ -542,7 +626,7 @@ class LyricWindow(QWidget):
                 break
         return best
 
-    def _draw_highlight_line(self, painter, text, y, line_h):
+    def _draw_highlight_line(self, painter, text, y, line_h, alpha=1.0):
         """逐字高亮：按进度从左到右填充高亮色。"""
         state = self.monitor.snapshot()
         pos_ms = state.get("position_ms", 0)
@@ -561,7 +645,9 @@ class LyricWindow(QWidget):
         baseline = int(y + self.cfg["font_size"])
 
         # 整行描边底色
-        self._draw_outlined_text(painter, x, baseline, text, self.color_normal)
+        base_c = QColor(self.color_normal)
+        base_c.setAlpha(int(base_c.alpha() * alpha))
+        self._draw_outlined_text(painter, x, baseline, text, base_c)
 
         fm = QFontMetrics(self.font)
         total_w = fm.horizontalAdvance(text)
@@ -572,7 +658,7 @@ class LyricWindow(QWidget):
                 painter.save()
                 painter.setPen(Qt.NoPen)
                 glow = QColor(self.color_glow)
-                glow.setAlpha(90)
+                glow.setAlpha(int(90 * alpha))
                 painter.setBrush(QBrush(glow))
                 r = self.glow_radius
                 painter.drawRoundedRect(x - r, y + 2, hl_w + r * 2, line_h - 4, r, r)
@@ -582,7 +668,9 @@ class LyricWindow(QWidget):
             path = QPainterPath()
             path.addRect(QRect(x, y, hl_w, line_h))
             painter.setClipPath(path)
-            self._draw_outlined_text(painter, x, baseline, text, self.color_highlight)
+            hl_c = QColor(self.color_highlight)
+            hl_c.setAlpha(int(hl_c.alpha() * alpha))
+            self._draw_outlined_text(painter, x, baseline, text, hl_c)
             painter.restore()
 
     def _draw_outlined_text(self, painter, x, y, text, color):
@@ -634,10 +722,10 @@ class LyricWindow(QWidget):
             return
         line_h = self.cfg["font_size"] + self.line_spacing
         row = int((pos.y() - 24) // line_h)
-        anchor = min(1, max(0, self.visible_lines - 1))
-        start = max(0, self.current_index - anchor)
-        start = min(start, max(0, len(self.lines) - self.visible_lines))
-        target = start + row
+        # 用当前布局反查该行号对应的歌词行（兼容三种补位模式）
+        target = next((li for li, r in self._last_layout if r == row), None)
+        if target is None:
+            return
         if 0 <= target < len(self.lines):
             self.monitor.align_to(self.lines[target][0])
             self.current_index = target

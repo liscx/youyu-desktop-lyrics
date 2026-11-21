@@ -147,6 +147,26 @@ class SettingsDialog(QDialog):
         self.lineno_check.setChecked(self.cfg.get("show_line_number", True))
         form.addRow("", self.lineno_check)
 
+        # 补位方式
+        self.refill_combo = QComboBox()
+        for key, label in (
+            ("batch", "整批补位（唱完消失，整批换新）"),
+            ("slot", "原位替换（哪行空补哪行）"),
+            ("shift", "逐行上移（传统方式）"),
+        ):
+            self.refill_combo.addItem(label, userData=key)
+        ri = self.refill_combo.findData(self.cfg.get("refill_mode", "batch"))
+        if ri >= 0:
+            self.refill_combo.setCurrentIndex(ri)
+        form.addRow("消失后补位", self.refill_combo)
+
+        self.read_spin = QSpinBox()
+        self.read_spin.setRange(1, 8)
+        self.read_spin.setValue(self.cfg.get("read_lines", 2))
+        self.read_spin.setSuffix(" 行")
+        self.read_spin.setToolTip("整批补位/原位替换模式下，同时显示的歌词行数")
+        form.addRow("读条行数", self.read_spin)
+
         layout.addLayout(form)
         return page
 
@@ -218,6 +238,7 @@ class SettingsDialog(QDialog):
         add_int("mote_count", "微粒数量", 0, 50)
         add_int("sweep_alpha", "光条亮度", 0, 80)
         add_int("sweep_fade_start", "光条渐隐起点(%)", 0, 95)
+        add_int("batch_gap_ms", "整批补位空窗(ms)", 0, 900)
         add_int("dissolve_char_ms", "单字化羽时长(ms)", 100, 1200)
         add_int("dissolve_stagger_ms", "整行化羽跨度(ms)", 0, 1500)
         add_int("dissolve_drift_x", "化羽左移(px)", 0, 80)
@@ -271,6 +292,10 @@ class SettingsDialog(QDialog):
         self.spacing_spin.setValue(self.cfg["line_spacing"])
         self.visible_spin.setValue(self.cfg.get("visible_lines", 4))
         self.lineno_check.setChecked(self.cfg.get("show_line_number", True))
+        ri = self.refill_combo.findData(self.cfg.get("refill_mode", "batch"))
+        if ri >= 0:
+            self.refill_combo.setCurrentIndex(ri)
+        self.read_spin.setValue(self.cfg.get("read_lines", 2))
 
         # fx 同步（主题可能改了 fx）
         self.fx_cfg = dict(self.cfg.get("fx", FX_DEFAULTS))
@@ -310,6 +335,8 @@ class SettingsDialog(QDialog):
             "line_spacing": self.spacing_spin.value(),
             "visible_lines": self.visible_spin.value(),
             "show_line_number": self.lineno_check.isChecked(),
+            "refill_mode": self.refill_combo.currentData(),
+            "read_lines": self.read_spin.value(),
         })
         # 收集 fx 参数
         fx = self.cfg.setdefault("fx", dict(FX_DEFAULTS))

@@ -161,6 +161,7 @@ class EffectEngine:
         self.prev_line_text = ""
         self.prev_line_y = 0
         self.prev_line_h = 0
+        self._batch_change_ms = -1  # 整批补位切换时刻（空窗淡入用）
         self._feathers = []           # 常驻近景羽毛（对象池）
         self._burst = []              # 临时爆发羽毛（入场/化羽消散），独立于池，避免被 sync 回收
         self._far_feathers = []
@@ -184,6 +185,7 @@ class EffectEngine:
         self.sweep_ms = _cfg_fx(cfg, "sweep_ms", 4200)
         self.sweep_alpha_max = _cfg_fx(cfg, "sweep_alpha", 34)       # 光条峰值透明度
         self.sweep_fade_start = (_cfg_fx(cfg, "sweep_fade_start", 55) / 100.0)  # 配置存 0-95 整数，引擎用 0..0.95
+        self.batch_gap_ms = _cfg_fx(cfg, "batch_gap_ms", 220)   # 整批补位空窗时长
         self.mist_speed = _cfg_fx(cfg, "mist_speed", 0.15)
         self.mist_alpha = _cfg_fx(cfg, "mist_alpha", 26)
         self.feather_alpha = _cfg_fx(cfg, "feather_alpha", 150)
@@ -231,6 +233,21 @@ class EffectEngine:
                 p.respawn(w, h, initial=True)
 
     # ---------------- 事件：当前行切换 ----------------
+    def on_batch_change(self):
+        """整批补位模式：一批唱完、整批换新时调用，制造短暂空窗再淡入。"""
+        if self.enabled:
+            self._batch_change_ms = self.time_ms
+
+    def batch_alpha(self):
+        """整批补位的可见度 0..1：前 batch_gap_ms 完全隐藏（空窗），随后淡入。"""
+        if not self.enabled or self._batch_change_ms < 0:
+            return 1.0
+        elapsed = self.time_ms - self._batch_change_ms
+        if elapsed < self.batch_gap_ms:
+            return 0.0
+        t = (elapsed - self.batch_gap_ms) / max(1, self.fade_in_ms)
+        return eased(min(1.0, t), "ease_out")
+
     def on_line_changed(self, idx, row_y, line_h, prev_text="",
                         prev_char_xs=None, prev_row_y=None):
         """当前歌词行变化时调用：重置入场时钟，记录上一行用于交叠退场，撒羽毛。
