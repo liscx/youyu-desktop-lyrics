@@ -23,18 +23,27 @@ FX_DEFAULTS = {
     "char_stagger_ms": 60,       # 逐字浮现的每字延迟(ms)
     "float_px": 3,               # 整体上下浮动幅度(px)
     "float_ms": 5200,            # 浮动周期(ms)
-    "breath_pct": 0.10,          # 微光呼吸幅度(0-0.5)
+    "breath_pct": 10,            # 微光呼吸幅度：百分比整数 0-50，引擎读取时 /100 转小数
     "breath_ms": 3600,           # 呼吸周期(ms)
     "sweep_ms": 4200,            # 扫光周期(ms)
     "sweep_alpha": 34,           # 光条峰值透明度(0-80)
     "sweep_fade_start": 55,      # 光条从 55% 处开始渐隐(0-95)，到右边界归零，避免硬切
+    "sweep_width_pct": 25,       # 扫光条宽度(占窗口宽度%)，默认 25
+    "glow_len_chars": 2.5,       # 文字柔光光条长度(以字宽为单位)，默认 2.5 字
     "batch_gap_ms": 220,         # 整批补位时上一批完全消失到下一批出现的间隔(ms)
+    "refill_delay_ms": 1000,     # 原位替换：空行位等消散羽毛飘走后再补入下一句的延迟(ms)
     # 逐字化羽消散：歌词消失时从左到右化为羽毛，向左上方飘散
     "word_dissolve": True,       # 逐字消散（关闭则退回整行渐隐）
     "dissolve_char_ms": 360,     # 单个字化羽时长(ms)
     "dissolve_stagger_ms": 420,  # 整行从左到右化羽的延迟跨度(ms)
-    "dissolve_drift_x": 22,      # 消散文字向左漂移(px)
-    "dissolve_drift_y": 34,      # 消散文字向上漂移(px)
+    "dissolve_drift_x": 22,      # 消散羽毛向左飘散距离(px)
+    "dissolve_drift_y": 34,      # 消散羽毛向上飘散距离(px)
+    "dissolve_spread_y": 70,     # 化羽区纵向散布(半高占行高百分比)：70=±0.7行高，总高1.4行高(原0.35的两倍)
+    "dissolve_feathers_per_char": 1,  # 化羽时每个字生成几片羽毛(1-6)
+    # 逐字跟随消散：唱到哪散到哪，切行时把未散完的字慢慢散完（贯穿整行生命周期）
+    "follow_dissolve": True,     # 逐字跟随消散总开关
+    "follow_char_ms": 340,       # 单字从被读条扫过到完全化羽的时长(ms)
+    "follow_lead": 6,            # 读条越过该字多少比例(%)后开始消散
     "mist_speed": 0.15,          # 雾气流动速度
     "mist_alpha": 26,            # 雾气不透明度(0-80)
     "feather_alpha": 150,        # 羽毛不透明度(0-255)
@@ -53,7 +62,8 @@ FX_DEFAULTS = {
     "crossfade": True,           # 行切换交叠
     "soft_glow": True,           # 文字柔光(非霓虹描边)
     "feather_on_enter": True,    # 入场撒羽毛
-    "feather_on_exit": True,     # 退场撒羽毛
+    "feather_on_exit": True,     # 逐字跟随消散：每字化出的羽毛
+    "feather_on_line_end": True, # 整行读完(切行)时整行从左到右化羽的羽毛，独立于逐字跟随羽毛
     # 粒子数量
     "feather_count": 12,
     "far_feather_count": 8,
@@ -73,6 +83,7 @@ DEFAULTS = {
     "font_bold": True,
     "color_normal": "#B7B7B7",
     "color_highlight": "#FFFFFF",
+    "color_reading": "#B7B7B7",  # 「读行歌词」颜色：当前行读条未经过的字（默认同普通色，不改变现有外观）
     "color_translated": "#9A9A9A",
     "color_glow": "#4A90E2",
     "glow_enabled": True,
@@ -109,6 +120,9 @@ def load_config():
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 user = json.load(f)
             cfg.update(user)
+            # 读行颜色未显式配置时，跟随实际生效的普通歌词颜色（保证外观不因升级改变）
+            if "color_reading" not in user:
+                cfg["color_reading"] = cfg["color_normal"]
             if isinstance(user.get("position"), dict):
                 cfg["position"] = {**DEFAULTS["position"], **user["position"]}
             # fx 字典深合并：用户只改了部分键也要保留其余默认值

@@ -14,7 +14,7 @@ from copy import deepcopy
 # 主题可覆盖的字段（与 core/config.py 的 DEFAULTS 外观键一致）
 THEME_FIELDS = (
     "font_family", "font_size", "font_bold",
-    "color_normal", "color_highlight", "color_translated", "color_glow",
+    "color_normal", "color_highlight", "color_reading", "color_translated", "color_glow",
     "glow_enabled", "glow_radius", "outline_width", "line_spacing",
     "opacity", "show_translation",
     "ambient", "ambient_density", "ambient_color", "accent_line",
@@ -31,6 +31,7 @@ CLASSIC = {
         "font_bold": True,
         "color_normal": "#B7B7B7",
         "color_highlight": "#FFFFFF",
+        "color_reading": "#B7B7B7",         # 当前行读条未经过的字，默认同普通色
         "color_translated": "#9A9A9A",
         "color_glow": "#4A90E2",
         "glow_enabled": True,
@@ -57,6 +58,7 @@ MELANCHOLY = {
         "font_bold": False,                 # 纤细，不张扬
         "color_normal": "#6E7C93",          # 雾蓝灰
         "color_highlight": "#DCE6F1",       # 雨夜冷白
+        "color_reading": "#6E7C93",         # 默认同普通色
         "color_translated": "#5A6880",      # 更沉的蓝灰
         "color_glow": "#3E5A8C",            # 深海蓝微光
         "glow_enabled": True,
@@ -83,6 +85,7 @@ NEON = {
         "font_bold": True,
         "color_normal": "#4C6A72",
         "color_highlight": "#00FFF0",       # 青
+        "color_reading": "#4C6A72",         # 默认同普通色
         "color_translated": "#3E6E78",
         "color_glow": "#FF2E88",            # 品红
         "glow_enabled": True,
@@ -109,6 +112,7 @@ MIST = {
         "font_bold": False,
         "color_normal": "#9FAEBD",          # 雾灰
         "color_highlight": "#F2F6FA",       # 月白
+        "color_reading": "#9FAEBD",         # 当前行未读字，默认同普通色
         "color_translated": "#8B9AA9",      # 淡蓝灰
         "color_glow": "#C7D8E8",            # 银白微光（非霓虹）
         "glow_enabled": True,
@@ -138,8 +142,10 @@ MIST = {
         "crossfade": True,
         "soft_glow": True,
         "feather_on_enter": True,
-        "feather_on_exit": True,    # 退场时文字化为羽毛向左上飘散
+        "feather_on_exit": True,    # 逐字跟随消散：每字化出的羽毛
+        "feather_on_line_end": True, # 整行读完时整行化羽的羽毛（可独立关闭）
         "word_dissolve": True,      # 从左到右逐字消散
+        "follow_dissolve": True,    # 唱到哪散到哪 + 切行收尾
     },
 }
 
