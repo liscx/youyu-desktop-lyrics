@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor, QFont
 
 from themes import theme_list, get_theme
-from core.config import FX_DEFAULTS
+from core.config import FX_DEFAULTS, save_config
 
 
 def color_dialog_button(parent, color, callback):
@@ -37,15 +37,24 @@ def color_dialog_button(parent, color, callback):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, cfg, parent=None, on_switch_theme=None):
+    def __init__(self, cfg, parent=None, on_switch_theme=None, on_apply=None):
         super().__init__(parent)
         self.cfg = cfg
         self.on_switch_theme = on_switch_theme
+        self.on_apply = on_apply
         self.setWindowTitle("桌面歌词 - 设置")
         self.setMinimumWidth(460)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        # 独立置顶的普通对话框：避免继承歌词窗 Qt.Tool / 点击穿透 导致关闭按钮失效
+        self.setWindowFlags(
+            Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
+            | Qt.WindowMinimizeButtonHint | Qt.WindowStaysOnTopHint
+        )
         self._suppress_theme_change = False
         self._build_ui()
+
+    def closeEvent(self, event):
+        """右上角 X / 系统关闭：与「关闭」按钮一致，直接接受关闭。"""
+        event.accept()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -64,13 +73,13 @@ class SettingsDialog(QDialog):
         root.addWidget(tip)
 
         buttons = QHBoxLayout()
-        ok = QPushButton("确定")
-        ok.clicked.connect(self._apply)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
+        apply = QPushButton("应用（不关闭）")
+        apply.clicked.connect(self._apply)
+        close = QPushButton("关闭")
+        close.clicked.connect(self.close)  # 走 closeEvent，右上角 X 同样有效
         buttons.addStretch()
-        buttons.addWidget(ok)
-        buttons.addWidget(cancel)
+        buttons.addWidget(apply)
+        buttons.addWidget(close)
         root.addLayout(buttons)
 
     # ---------------- 外观页 ----------------
@@ -114,7 +123,12 @@ class SettingsDialog(QDialog):
         self.normal_btn = color_dialog_button(self, self.cfg["color_normal"], lambda c: None)
         form.addRow("普通歌词颜色", self.normal_btn)
         self.highlight_btn = color_dialog_button(self, self.cfg["color_highlight"], lambda c: None)
-        form.addRow("高亮颜色", self.highlight_btn)
+        form.addRow("高亮颜色（读条扫过）", self.highlight_btn)
+        self.reading_btn = color_dialog_button(
+            self, self.cfg.get("color_reading", self.cfg["color_normal"]), lambda c: None
+        )
+        self.reading_btn.setToolTip("当前行读条尚未扫到的字所用颜色，可区别于其他歌词行")
+        form.addRow("读行歌词颜色", self.reading_btn)
         self.translate_btn = color_dialog_button(self, self.cfg["color_translated"], lambda c: None)
         form.addRow("翻译颜色", self.translate_btn)
         self.glow_btn = color_dialog_button(self, self.cfg["color_glow"], lambda c: None)
@@ -197,13 +211,41 @@ class SettingsDialog(QDialog):
             ("mist_flow", "雾气流动"), ("breathing", "微光呼吸"),
             ("float", "整体浮动"), ("light_sweep", "光线扫过"),
             ("crossfade", "行切换交叠"), ("soft_glow", "文字柔光"),
-            ("feather_on_enter", "入场羽毛"), ("feather_on_exit", "退场羽毛"),
+            ("feather_on_enter", "入场羽毛"), ("feather_on_exit", "逐字消散羽毛"),
+            ("feather_on_line_end", "整行读完羽毛"),
             ("word_dissolve", "逐字化羽消散"),
+            ("follow_dissolve", "逐字跟随消散(唱到哪散到哪)"),
         ]
         self.fx_switches = {}
         for i, (key, label) in enumerate(switches):
             cb = QCheckBox(label)
             cb.setChecked(fx.get(key, FX_DEFAULTS[key]))
+            if key == "char_reveal":
+                cb.setToolTip(
+                    "逐字浮现：歌词【补进窗口】时逐字从雾中浮现，"
+                    "不是读条唱到它时才出现。补位延迟结束后开始播放。"
+                )
+            if key == "feathers":
+                cb.setToolTip(
+                    "近景【常驻】羽毛：在文字上方缓慢循环飘的羽毛。"
+                    "只控制常驻羽毛；字化羽飞出、入场撒羽毛由下面的「退场羽毛/入场羽毛」"
+                    "独立控制，关掉这个不影响它们。"
+                )
+            if key == "feather_on_exit":
+                cb.setToolTip(
+                    "逐字消散羽毛：逐字跟随消散时，每个字被读条扫过后化出的羽毛。"
+                    "独立于「羽毛漂浮」常驻开关，也独立于「整行读完羽毛」。"
+                )
+            if key == "feather_on_line_end":
+                cb.setToolTip(
+                    "整行读完羽毛：切到下一行时，上一行整行从左到右化羽的那批羽毛。"
+                    "与「逐字消散羽毛」分开，可单独关闭——只想保留逐字化羽就关掉这个。"
+                )
+            if key == "far_feathers":
+                cb.setToolTip(
+                    "远景羽毛（背景层，画在文字下方）：数量由「远景羽毛数量(背景)」控制，"
+                    "颜色/透明度与近景羽毛共用 feather_color / feather_alpha。"
+                )
             self.fx_switches[key] = cb
             grid.addWidget(cb, i // 2, i % 2)
         sw_group.setLayout(grid)
@@ -234,15 +276,37 @@ class SettingsDialog(QDialog):
         add_int("blur_max", "羽化程度", 0, 12)
         add_int("breath_pct", "呼吸幅度(%)", 0, 40)
         add_int("mist_alpha", "雾气浓度", 0, 80)
-        add_int("feather_count", "羽毛数量", 0, 30)
+        add_int("feather_count", "近景羽毛数量", 0, 30)
+        add_int("far_feather_count", "远景羽毛数量(背景)", 0, 30)
         add_int("mote_count", "微粒数量", 0, 50)
         add_int("sweep_alpha", "光条亮度", 0, 80)
         add_int("sweep_fade_start", "光条渐隐起点(%)", 0, 95)
+        add_int("sweep_width_pct", "扫光条宽度(窗口%)", 5, 80)
+        # 柔光条长度是浮点数(字宽倍数)，滑块用 ×10 的整数表示
+        gl = QSlider(Qt.Horizontal)
+        gl.setRange(5, 80)  # 0.5 ~ 8.0 字
+        gl.setValue(int(float(fx.get("glow_len_chars", FX_DEFAULTS["glow_len_chars"])) * 10))
+        gl_lab = QLabel(f"柔光条长度(字宽) ({gl.value() / 10:.1f})")
+        gl.valueChanged.connect(lambda v: gl_lab.setText(f"柔光条长度(字宽) ({v / 10:.1f})"))
+        pform.addRow(gl_lab, gl)
+        self.fx_glow_len = gl
         add_int("batch_gap_ms", "整批补位空窗(ms)", 0, 900)
+        rd = add_int("refill_delay_ms", "空位补位延迟(ms)", 0, 2500)
+        rd.setToolTip("仅「原位替换（哪行空补哪行）」模式有效：唱完的行位先留空，"
+                      "等羽毛消散完再补入下一句。0 = 立即补位（旧行为）")
         add_int("dissolve_char_ms", "单字化羽时长(ms)", 100, 1200)
         add_int("dissolve_stagger_ms", "整行化羽跨度(ms)", 0, 1500)
-        add_int("dissolve_drift_x", "化羽左移(px)", 0, 80)
-        add_int("dissolve_drift_y", "化羽上移(px)", 0, 80)
+        add_int("dissolve_drift_x", "羽毛左飘(px)", 0, 80)
+        add_int("dissolve_drift_y", "羽毛上飘(px)", 0, 80)
+        sh = add_int("dissolve_spread_y", "化羽区高度(%)", 0, 200)
+        sh.setToolTip("化羽羽毛出现的纵向范围(半高占行高百分比)。70=±0.7行高，"
+                      "是原先(±0.35)的两倍；横向始终等于整行文字宽度。")
+        ppc = add_int("dissolve_feathers_per_char", "每字化羽片数", 1, 6)
+        ppc.setToolTip("每个字消散时化出几片羽毛。1=每字一片；调大更蓬松，"
+                       "多片会在字宽内横向错开、延迟错开，不会完全重叠。"
+                       "片数越多羽毛越多，可能影响性能。")
+        add_int("follow_char_ms", "单字跟随化羽时长(ms)", 100, 1000)
+        add_int("follow_lead", "消散提前量(%)", 0, 30)
         p_group.setLayout(pform)
         layout.addWidget(p_group)
 
@@ -276,10 +340,11 @@ class SettingsDialog(QDialog):
         for btn, key in (
             (self.normal_btn, "color_normal"),
             (self.highlight_btn, "color_highlight"),
+            (self.reading_btn, "color_reading"),
             (self.translate_btn, "color_translated"),
             (self.glow_btn, "color_glow"),
         ):
-            color = self.cfg[key]
+            color = self.cfg.get(key, self.cfg.get("color_normal", "#B7B7B7"))
             btn.setText(color)
             btn.setStyleSheet(
                 f"background:{color};"
@@ -304,6 +369,9 @@ class SettingsDialog(QDialog):
             cb.setChecked(self.fx_cfg.get(key, FX_DEFAULTS[key]))
         for key, s in self.fx_sliders.items():
             s.setValue(int(self.fx_cfg.get(key, FX_DEFAULTS[key])))
+        self.fx_glow_len.setValue(
+            int(float(self.fx_cfg.get("glow_len_chars", FX_DEFAULTS["glow_len_chars"])) * 10)
+        )
         ei = self.fx_ease.findData(self.fx_cfg.get("easing", "ease_out"))
         if ei >= 0:
             self.fx_ease.setCurrentIndex(ei)
@@ -327,6 +395,7 @@ class SettingsDialog(QDialog):
             "font_bold": self.bold_check.isChecked(),
             "color_normal": self.normal_btn.text(),
             "color_highlight": self.highlight_btn.text(),
+            "color_reading": self.reading_btn.text(),
             "color_translated": self.translate_btn.text(),
             "color_glow": self.glow_btn.text(),
             "glow_enabled": self.glow_check.isChecked(),
@@ -345,5 +414,9 @@ class SettingsDialog(QDialog):
             fx[key] = cb.isChecked()
         for key, s in self.fx_sliders.items():
             fx[key] = s.value()
+        fx["glow_len_chars"] = self.fx_glow_len.value() / 10.0
         fx["easing"] = self.fx_ease.currentData()
-        self.accept()
+        # 实时生效并保存，但不关闭窗口（方便边调边看效果）
+        if self.on_apply:
+            self.on_apply()
+        save_config(self.cfg)
