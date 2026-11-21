@@ -7,7 +7,7 @@
 import random
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtWidgets import QWidget, QMenu, QApplication
+from PySide6.QtWidgets import QWidget, QMenu, QApplication, QDialog
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetrics, QBrush,
     QPen, QPainterPath, QLinearGradient,
@@ -17,6 +17,7 @@ from core.config import save_config
 from core.lyrics import get_lyrics
 from ui.hotkey import set_click_through
 from ui.effects import EffectEngine
+from ui.settings import SettingsDialog
 
 
 class RainDrop:
