@@ -8,157 +8,83 @@
   4. 引擎只管粒子；文字的逐字消散 alpha 仍由 EffectEngine 负责。
 """
 import math
+import os
 import random
 
-from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QColor, QPainterPath, QBrush, QPen
+from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 
 from core.floating_config import (
     TIER_COUNT, TIER_SPEED, TIER_DEVIATION, TIER_ROTATION,
-    MATERIALS, SCENE_IDS,
+    MATERIALS, SCENE_IDS, materials_dir,
 )
 
 
 # ---------------------------------------------------------------------------
-# 素材绘制：每个函数接收 painter / size / color / t，以原点为中心绘制
+# 素材绘制：统一 SVG 渲染（矢量缩放无损，与大小拖条/实时示例共用同一公式）
+#
+# SVG 自带配色，绘制时不再用主题色染色，只把 color 的 alpha 当不透明度用。
+# 渲染结果按 (素材, 尺寸) 缓存成 QPixmap，逐帧只做缩放贴图，避免重复解析矢量。
 # ---------------------------------------------------------------------------
-def _draw_feather(p, s, c):
-    """羽毛：带羽轴的柳叶形羽片。
+_SVG_CACHE = {}   # material_id -> QSvgRenderer（解析一次）
+_PIX_CACHE = {}   # (material_id, size_px) -> QPixmap（同尺寸复用）
+_PIX_CACHE_MAX = 512
 
-    贝塞尔宽度从 0.55 提到 0.72——羽片实际宽高比约 0.55（对应 MATERIALS.aspect），
-    避免大尺寸下看起来像"大长条"。
+
+def _svg_renderer(material_id):
+    r = _SVG_CACHE.get(material_id)
+    if r is None:
+        meta = MATERIALS.get(material_id, {})
+        path = os.path.join(materials_dir(), meta.get("svg", "glow.svg"))
+        r = QSvgRenderer(path)
+        _SVG_CACHE[material_id] = r
+    return r
+
+
+def _svg_pixmap(material_id, size_px):
+    key = (material_id, size_px)
+    pm = _PIX_CACHE.get(key)
+    if pm is not None:
+        return pm
+    r = _svg_renderer(material_id)
+    if not r.isValid():
+        return None
+    pm = QPixmap(size_px, size_px)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    r.render(p, QRectF(0, 0, size_px, size_px))
+    p.end()
+    if len(_PIX_CACHE) >= _PIX_CACHE_MAX:
+        _PIX_CACHE.clear()
+    _PIX_CACHE[key] = pm
+    return pm
+
+
+def draw_material(painter, s, c, material_id):
+    """按素材 id 绘制 SVG：缩放到 2s×2s 方框，居中于原点。
+
+    s 为半高（沿用旧手绘约定，与 SizeSlider/SizePreview 的公式一致）。
+    c 只取 alpha 作为不透明度；SVG 自身配色保留。
     """
-    p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(c))
-    path = QPainterPath()
-    path.moveTo(0, -s)
-    path.cubicTo(s * 0.72, -s * 0.35, s * 0.72, s * 0.45, 0, s)
-    path.cubicTo(-s * 0.72, s * 0.45, -s * 0.72, -s * 0.35, 0, -s)
-    p.drawPath(path)
-    stem = QColor(c)
-    stem.setAlpha(min(255, stem.alpha() + 40))
-    p.setPen(QPen(stem, max(0.6, s * 0.08)))
-    p.drawLine(0, int(-s * 0.9), 0, int(s * 0.9))
+    size_px = max(2, int(round(s * 2)))
+    pm = _svg_pixmap(material_id, size_px)
+    if pm is None:
+        return
+    painter.save()
+    painter.setOpacity(max(0.0, min(1.0, c.alpha() / 255.0)))
+    painter.drawPixmap(QRectF(-s, -s, s * 2, s * 2), pm, QRectF(0, 0, size_px, size_px))
+    painter.restore()
 
 
-def _draw_sakura(p, s, c):
-    """樱花：五片带缺口的圆润花瓣 + 花蕊。"""
-    p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(c))
-    for i in range(5):
-        p.save()
-        p.rotate(i * 72)
-        path = QPainterPath()
-        path.moveTo(0, 0)
-        path.cubicTo(-s * 0.5, -s * 0.5, -s * 0.35, -s * 1.15, 0, -s * 0.9)
-        path.cubicTo(s * 0.35, -s * 1.15, s * 0.5, -s * 0.5, 0, 0)
-        p.drawPath(path)
-        p.restore()
-    core = QColor(c)
-    core.setAlpha(min(255, core.alpha() + 60))
-    p.setBrush(QBrush(core))
-    p.drawEllipse(-s * 0.14, -s * 0.14, s * 0.28, s * 0.28)
+def _make_drawer(material_id):
+    def drawer(painter, s, c):
+        draw_material(painter, s, c, material_id)
+    drawer.__name__ = f"draw_{material_id}"
+    return drawer
 
 
-def _draw_petal(p, s, c):
-    """单片花瓣：柳叶形 + 中脉。"""
-    p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(c))
-    path = QPainterPath()
-    path.moveTo(0, -s)
-    path.cubicTo(s * 0.62, -s * 0.4, s * 0.5, s * 0.6, 0, s * 0.9)
-    path.cubicTo(-s * 0.5, s * 0.6, -s * 0.62, -s * 0.4, 0, -s)
-    p.drawPath(path)
-    vein = QColor(c)
-    vein.setAlpha(max(0, vein.alpha() - 40))
-    p.setPen(QPen(vein, max(0.5, s * 0.06)))
-    p.drawLine(0, int(-s * 0.7), 0, int(s * 0.6))
-
-
-def _draw_snow(p, s, c):
-    """雪花：六角对称枝晶。"""
-    p.setPen(QPen(c, max(0.7, s * 0.11), Qt.SolidLine, Qt.RoundCap))
-    for i in range(6):
-        p.save()
-        p.rotate(i * 60)
-        p.drawLine(0, 0, 0, int(-s))
-        for d in (0.45, 0.72):
-            y = int(-s * d)
-            p.drawLine(0, y, int(s * 0.28), y + int(s * 0.22))
-            p.drawLine(0, y, int(-s * 0.28), y + int(s * 0.22))
-        p.restore()
-    p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(c))
-    p.drawEllipse(-s * 0.12, -s * 0.12, s * 0.24, s * 0.24)
-
-
-def _draw_maple(p, s, c):
-    """枫叶：五裂掌状叶形 + 短柄。"""
-    p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(c))
-    path = QPainterPath()
-    pts = [(0, -s), (0.28, -0.42), (0.72, -0.55), (0.5, -0.12),
-           (0.95, 0.22), (0.42, 0.32), (0.3, 0.78), (0, 0.5)]
-    path.moveTo(pts[0][0] * s, pts[0][1] * s)
-    for x, y in pts[1:]:
-        path.lineTo(x * s, y * s)
-    for x, y in reversed(pts[:-1]):
-        path.lineTo(-x * s, y * s)
-    path.closeSubpath()
-    p.drawPath(path)
-
-
-def _draw_glow(p, s, c):
-    """光点：柔光圆斑（三层同心，最外层淡）。"""
-    p.setPen(Qt.NoPen)
-    for scale, alpha_mul in ((1.6, 0.18), (1.0, 0.45), (0.45, 1.0)):
-        cc = QColor(c)
-        cc.setAlpha(int(min(255, cc.alpha() * alpha_mul)))
-        p.setBrush(QBrush(cc))
-        r = s * scale
-        p.drawEllipse(-r, -r, r * 2, r * 2)
-
-
-def _draw_butterfly(p, s, c):
-    """蝴蝶：左右翅 + 身体，翅膀带轻微色差。"""
-    p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(c))
-    for sign in (-1, 1):
-        path = QPainterPath()
-        path.moveTo(0, -s * 0.25)
-        path.cubicTo(sign * s * 1.1, -s * 1.2, sign * s * 1.15, s * 0.35, 0, s * 0.2)
-        p.drawPath(path)
-        path2 = QPainterPath()
-        path2.moveTo(0, s * 0.1)
-        path2.cubicTo(sign * s * 0.8, s * 0.15, sign * s * 0.75, s * 0.95, 0, s * 0.5)
-        p.drawPath(path2)
-    body = QColor(c)
-    body.setAlpha(min(255, body.alpha() + 70))
-    p.setBrush(QBrush(body))
-    p.drawEllipse(-s * 0.09, -s * 0.6, s * 0.18, s * 1.3)
-
-
-def _draw_rain(p, s, c):
-    """雨丝（迁移自忧郁主题）：短斜线。"""
-    p.setPen(QPen(c, max(0.8, s * 0.12), Qt.SolidLine, Qt.RoundCap))
-    p.drawLine(0, -s, -s * 0.18, s)
-
-
-MATERIAL_DRAW = {
-    "feather": _draw_feather,
-    "sakura": _draw_sakura,
-    "petal": _draw_petal,
-    "snow": _draw_snow,
-    "maple": _draw_maple,
-    "glow": _draw_glow,
-    "butterfly": _draw_butterfly,
-    "rain": _draw_rain,
-    "custom": _draw_glow,  # 待接入：暂用光点占位
-}
-
-# 雨丝加入运行时素材表（配置层 MATERIALS 不含，专供迁移的旧雨滴使用）
-_RUNTIME_MATERIALS = dict(MATERIALS)
-_RUNTIME_MATERIALS["rain"] = {"label": "雨丝", "aspect": 0.2, "base": 9}
+MATERIAL_DRAW = {mid: _make_drawer(mid) for mid in MATERIALS}
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +159,8 @@ class FlyingObject:
             return
         c = QColor(color if color else self.color)
         c.setAlpha(int(self.alpha * f * (0.5 if self.depth > 0.5 else 1.0)))
-        drawer = MATERIAL_DRAW.get(self.material, _draw_glow)
-        meta = _RUNTIME_MATERIALS.get(self.material, {"base": 10})
+        drawer = MATERIAL_DRAW.get(self.material) or MATERIAL_DRAW["glow"]
+        meta = MATERIALS.get(self.material, {"base": 10})
         # 远景(depth>0.5)按 0.6 倍缩，恢复 git 版的近/远景层次感
         depth_scale = 0.6 if self.depth > 0.5 else 1.0
         s = self.size * meta["base"] / 10.0 * depth_scale

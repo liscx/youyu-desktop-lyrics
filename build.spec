@@ -31,7 +31,7 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[("assets/materials", "assets/materials")],
     hiddenimports=hidden_winrt,
     hookspath=[],
     hooksconfig={},

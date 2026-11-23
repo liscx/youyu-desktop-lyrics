@@ -29,20 +29,38 @@
 挡位只是 UI 交互形式，底层映射到精确数值。所有映射集中在本文件，
 改挡位手感只需改 TIER_* 表，不用碰引擎。
 """
+import os
+import sys
+
+from core.config import BASE_DIR
 
 # ---------------- 素材注册表 ----------------
-# id -> (显示名, 宽高比, 基础尺寸px), 自定义图片本期只预留
+# id -> 显示名 + SVG 文件 + 基础尺寸px。所有素材统一 SVG 驱动（矢量，缩放无损）。
+# SVG 位于 assets/materials/：源码运行时在项目根目录，打包后由 PyInstaller
+# 解包到 sys._MEIPASS（见 materials_dir()）。
 MATERIALS = {
-    "feather": {"label": "羽毛", "aspect": 0.55, "base": 8},
-    "sakura":  {"label": "樱花", "aspect": 1.0,  "base": 10},
-    "petal":   {"label": "花瓣", "aspect": 0.65, "base": 9},
-    "snow":    {"label": "雪花", "aspect": 1.0,  "base": 8},
-    "maple":   {"label": "枫叶", "aspect": 0.95, "base": 11},
-    "glow":    {"label": "光点", "aspect": 1.0,  "base": 7},
-    "butterfly": {"label": "蝴蝶", "aspect": 1.2, "base": 12},
-    "custom":  {"label": "自定义图片（待接入）", "aspect": 1.0, "base": 12},
+    "feather":   {"label": "羽毛",   "svg": "feather.svg",   "base": 8},
+    "sakura":    {"label": "樱花",   "svg": "sakura.svg",    "base": 10},
+    "petal":     {"label": "花瓣",   "svg": "petal.svg",     "base": 9},
+    "snow":      {"label": "雪花",   "svg": "snow.svg",      "base": 8},
+    "maple":     {"label": "枫叶",   "svg": "maple.svg",     "base": 11},
+    "glow":      {"label": "光点",   "svg": "glow.svg",      "base": 7},
+    "butterfly": {"label": "蝴蝶",   "svg": "butterfly.svg", "base": 12},
+    "leaf":      {"label": "树叶",   "svg": "leaf.svg",      "base": 10},
+    "sunflower": {"label": "向日葵", "svg": "sunflower.svg", "base": 11},
+    "rain":      {"label": "雨丝",   "svg": "rain.svg",      "base": 9},
+    "custom":    {"label": "自定义图片（待接入）", "svg": "glow.svg", "base": 12},
 }
 MATERIAL_IDS = tuple(MATERIALS.keys())
+
+
+def materials_dir():
+    """内置 SVG 素材目录：打包后在 _MEIPASS，源码运行时在项目根目录。"""
+    if getattr(sys, "frozen", False):
+        root = getattr(sys, "_MEIPASS", BASE_DIR)
+    else:
+        root = BASE_DIR
+    return os.path.join(root, "assets", "materials")
 
 # ---------------- 挡位表 ----------------
 TIER_COUNT = {"few": 4, "some": 9, "many": 18, "lots": 32}
