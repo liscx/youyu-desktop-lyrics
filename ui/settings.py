@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
-"""设置面板：外观 + 雾中飞羽特效两页。"""
+"""设置面板：外观 / 飞行物 / 文字动效三页。"""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QLabel, QComboBox, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QSlider, QCheckBox, QFontComboBox, QSpinBox,
     QColorDialog, QTabWidget, QWidget, QGroupBox, QGridLayout, QScrollArea,
+    QLineEdit, QFileDialog,
 )
 from PySide6.QtGui import QColor, QFont
 
-from themes import theme_list, get_theme
+from themes import theme_list
 from core.config import FX_DEFAULTS, save_config
+from core.floating_config import load_floating, save_floating
+from ui.floating_settings import FloatingSettingsPage
+from ui.fx_tiers import FX_TIERS, ValueTierSelector
 
 
 def color_dialog_button(parent, color, callback):
@@ -42,6 +46,7 @@ class SettingsDialog(QDialog):
         self.cfg = cfg
         self.on_switch_theme = on_switch_theme
         self.on_apply = on_apply
+        self._floating = load_floating(cfg)
         self.setWindowTitle("桌面歌词 - 设置")
         self.setMinimumWidth(460)
         # 独立置顶的普通对话框：避免继承歌词窗 Qt.Tool / 点击穿透 导致关闭按钮失效
@@ -62,7 +67,8 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(self._build_appearance_tab(), "外观")
-        tabs.addTab(self._build_effects_tab(), "雾中飞羽 · 特效")
+        tabs.addTab(self._build_floating_page(), "飞行物")
+        tabs.addTab(self._build_effects_tab(), "文字动效")
         root.addWidget(tabs)
 
         tip = QLabel(
@@ -91,20 +97,14 @@ class SettingsDialog(QDialog):
         theme_row = QHBoxLayout()
         theme_row.addWidget(QLabel("外观主题"))
         self.theme_combo = QComboBox()
-        for key, label, icon_char, desc in theme_list():
+        for key, label, icon_char in theme_list():
             self.theme_combo.addItem(f"{icon_char}  {label}", userData=key)
-            self.theme_combo.setItemData(self.theme_combo.count() - 1, desc, Qt.ToolTipRole)
         idx = self.theme_combo.findData(self.cfg.get("theme", "classic"))
         if idx >= 0:
             self.theme_combo.setCurrentIndex(idx)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         theme_row.addWidget(self.theme_combo, 1)
         layout.addLayout(theme_row)
-
-        self.theme_desc = QLabel(get_theme(self.cfg.get("theme", "classic"))["desc"])
-        self.theme_desc.setStyleSheet("color:#7BA7D7;font-size:11px;padding:2px 0 8px 0;")
-        self.theme_desc.setWordWrap(True)
-        layout.addWidget(self.theme_desc)
 
         form = QFormLayout()
         self.font_combo = QFontComboBox()
@@ -182,39 +182,51 @@ class SettingsDialog(QDialog):
         form.addRow("读条行数", self.read_spin)
 
         layout.addLayout(form)
+
+        # 网易云安装目录（CDP 补丁需要定位 libcef.dll）
+        netease_group = QGroupBox("网易云安装目录（CDP 精确进度补丁用）")
+        netease_row = QHBoxLayout()
+        self.netease_edit = QLineEdit(self.cfg.get("netease_dir", ""))
+        self.netease_edit.setPlaceholderText("填 libcef.dll 所在文件夹，留空自动探测")
+        netease_row.addWidget(self.netease_edit, 1)
+        browse = QPushButton("浏览...")
+
+        def pick_dir():
+            chosen = QFileDialog.getExistingDirectory(
+                self, "选择网易云安装目录", self.netease_edit.text() or None
+            )
+            if chosen:
+                self.netease_edit.setText(chosen)
+
+        browse.clicked.connect(pick_dir)
+        netease_row.addWidget(browse)
+        netease_group.setLayout(netease_row)
+        netease_group.setToolTip(
+            "打补丁时需要定位 libcef.dll。网易云装在非标准目录时在这里指定，"
+            "留空则自动探测常见安装位置。"
+        )
+        layout.addWidget(netease_group)
         return page
 
-    # ---------------- 特效页 ----------------
-    def _mk_slider(self, key, label, lo, hi, scale=1):
-        s = QSlider(Qt.Horizontal)
-        s.setRange(lo, hi)
-        val = self.fx_cfg.get(key, FX_DEFAULTS[key])
-        s.setValue(int(val * scale) if scale != 1 else int(val))
-        s.setObjectName(key)
-        return s, label
+    # ---------------- 飞行物页 ----------------
+    def _build_floating_page(self):
+        self.floating_page = FloatingSettingsPage(self._floating)
+        return self.floating_page
 
+    # ---------------- 文字动效页 ----------------
     def _build_effects_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
         fx = self.fx_cfg
 
-        self.fx_enabled = QCheckBox("启用「雾中飞羽」特效（总开关）")
-        self.fx_enabled.setChecked(fx.get("enabled", True))
-        layout.addWidget(self.fx_enabled)
-
-        # 各动画独立开关（两列网格）
-        sw_group = QGroupBox("动画模块（独立开关）")
+        # 文字动效开关（飞行物相关开关已移到「飞行物」页）
+        sw_group = QGroupBox("文字动效（飞行物请在「飞行物」页设置）")
         grid = QGridLayout()
         switches = [
-            ("char_reveal", "逐字浮现"), ("feathers", "羽毛漂浮"),
-            ("far_feathers", "远景羽毛"), ("motes", "微粒漂浮"),
-            ("mist_flow", "雾气流动"), ("breathing", "微光呼吸"),
-            ("float", "整体浮动"), ("light_sweep", "光线扫过"),
-            ("crossfade", "行切换交叠"), ("soft_glow", "文字柔光"),
-            ("feather_on_enter", "入场羽毛"), ("feather_on_exit", "逐字消散羽毛"),
-            ("feather_on_line_end", "整行读完羽毛"),
-            ("word_dissolve", "逐字化羽消散"),
-            ("follow_dissolve", "逐字跟随消散(唱到哪散到哪)"),
+            ("char_reveal", "逐字浮现"), ("breathing", "微光呼吸"),
+            ("float", "整体浮动"), ("crossfade", "行切换交叠"),
+            ("soft_glow", "文字柔光"), ("word_dissolve", "整行消散"),
+            ("follow_dissolve", "逐字跟随消散"),
         ]
         self.fx_switches = {}
         for i, (key, label) in enumerate(switches):
@@ -225,88 +237,37 @@ class SettingsDialog(QDialog):
                     "逐字浮现：歌词【补进窗口】时逐字从雾中浮现，"
                     "不是读条唱到它时才出现。补位延迟结束后开始播放。"
                 )
-            if key == "feathers":
-                cb.setToolTip(
-                    "近景【常驻】羽毛：在文字上方缓慢循环飘的羽毛。"
-                    "只控制常驻羽毛；字化羽飞出、入场撒羽毛由下面的「退场羽毛/入场羽毛」"
-                    "独立控制，关掉这个不影响它们。"
-                )
-            if key == "feather_on_exit":
-                cb.setToolTip(
-                    "逐字消散羽毛：逐字跟随消散时，每个字被读条扫过后化出的羽毛。"
-                    "独立于「羽毛漂浮」常驻开关，也独立于「整行读完羽毛」。"
-                )
-            if key == "feather_on_line_end":
-                cb.setToolTip(
-                    "整行读完羽毛：切到下一行时，上一行整行从左到右化羽的那批羽毛。"
-                    "与「逐字消散羽毛」分开，可单独关闭——只想保留逐字化羽就关掉这个。"
-                )
-            if key == "far_feathers":
-                cb.setToolTip(
-                    "远景羽毛（背景层，画在文字下方）：数量由「远景羽毛数量(背景)」控制，"
-                    "颜色/透明度与近景羽毛共用 feather_color / feather_alpha。"
-                )
+            elif key == "word_dissolve":
+                cb.setToolTip("切到下一行时，上一整行从左到右依次消散（飞行物形态在「飞行物」页的「歌词切换」场景设置）")
+            elif key == "follow_dissolve":
+                cb.setToolTip("读条唱到哪、文字就在哪逐字消散（飞行物在「飞行物」页的「逐字消散配置」场景设置）")
             self.fx_switches[key] = cb
             grid.addWidget(cb, i // 2, i % 2)
         sw_group.setLayout(grid)
         layout.addWidget(sw_group)
 
-        # 关键参数（时间/强度/距离/数量）
+        # 参数调节：全部用有限挡位（与飞行物页风格一致，不暴露底层数值）
         p_group = QGroupBox("参数调节")
         pform = QFormLayout()
-        self.fx_sliders = {}
+        self.fx_tiers = {}
 
-        def add_int(key, label, lo, hi):
-            s = QSlider(Qt.Horizontal)
-            s.setRange(lo, hi)
-            s.setValue(int(fx.get(key, FX_DEFAULTS[key])))
-            lab = QLabel(f"{label} ({s.value()})")
-            s.valueChanged.connect(
-                lambda v, lab=lab, label=label: lab.setText(f"{label} ({v})")
-            )
-            pform.addRow(lab, s)
-            self.fx_sliders[key] = s
-            return s
-
-        add_int("fade_in_ms", "入场时长(ms)", 200, 2500)
-        add_int("fade_out_ms", "退场时长(ms)", 200, 2000)
-        add_int("char_stagger_ms", "逐字延迟(ms)", 0, 200)
-        add_int("rise_px", "上浮距离(px)", 0, 30)
-        add_int("float_px", "浮动幅度(px)", 0, 12)
-        add_int("blur_max", "羽化程度", 0, 12)
-        add_int("breath_pct", "呼吸幅度(%)", 0, 40)
-        add_int("mist_alpha", "雾气浓度", 0, 80)
-        add_int("feather_count", "近景羽毛数量", 0, 30)
-        add_int("far_feather_count", "远景羽毛数量(背景)", 0, 30)
-        add_int("mote_count", "微粒数量", 0, 50)
-        add_int("sweep_alpha", "光条亮度", 0, 80)
-        add_int("sweep_fade_start", "光条渐隐起点(%)", 0, 95)
-        add_int("sweep_width_pct", "扫光条宽度(窗口%)", 5, 80)
-        # 柔光条长度是浮点数(字宽倍数)，滑块用 ×10 的整数表示
-        gl = QSlider(Qt.Horizontal)
-        gl.setRange(5, 80)  # 0.5 ~ 8.0 字
-        gl.setValue(int(float(fx.get("glow_len_chars", FX_DEFAULTS["glow_len_chars"])) * 10))
-        gl_lab = QLabel(f"柔光条长度(字宽) ({gl.value() / 10:.1f})")
-        gl.valueChanged.connect(lambda v: gl_lab.setText(f"柔光条长度(字宽) ({v / 10:.1f})"))
-        pform.addRow(gl_lab, gl)
-        self.fx_glow_len = gl
-        add_int("batch_gap_ms", "整批补位空窗(ms)", 0, 900)
-        rd = add_int("refill_delay_ms", "空位补位延迟(ms)", 0, 2500)
-        rd.setToolTip("仅「原位替换（哪行空补哪行）」模式有效：唱完的行位先留空，"
-                      "等羽毛消散完再补入下一句。0 = 立即补位（旧行为）")
-        add_int("dissolve_char_ms", "单字化羽时长(ms)", 100, 1200)
-        add_int("dissolve_stagger_ms", "整行化羽跨度(ms)", 0, 1500)
-        add_int("dissolve_drift_x", "羽毛左飘(px)", 0, 80)
-        add_int("dissolve_drift_y", "羽毛上飘(px)", 0, 80)
-        sh = add_int("dissolve_spread_y", "化羽区高度(%)", 0, 200)
-        sh.setToolTip("化羽羽毛出现的纵向范围(半高占行高百分比)。70=±0.7行高，"
-                      "是原先(±0.35)的两倍；横向始终等于整行文字宽度。")
-        ppc = add_int("dissolve_feathers_per_char", "每字化羽片数", 1, 6)
-        ppc.setToolTip("每个字消散时化出几片羽毛。1=每字一片；调大更蓬松，"
-                       "多片会在字宽内横向错开、延迟错开，不会完全重叠。"
-                       "片数越多羽毛越多，可能影响性能。")
-        add_int("follow_char_ms", "单字跟随化羽时长(ms)", 100, 1000)
-        add_int("follow_lead", "消散提前量(%)", 0, 30)
+        PARAM_LABELS = {
+            "fade_in_ms": "入场速度", "fade_out_ms": "退场速度",
+            "char_stagger_ms": "逐字间隔", "rise_px": "上浮距离",
+            "float_px": "浮动幅度", "blur_max": "文字模糊",
+            "breath_pct": "呼吸幅度", "breath_ms": "呼吸速度",
+            "float_ms": "浮动速度", "glow_len_chars": "柔光长度",
+            "batch_gap_ms": "整批空窗", "refill_delay_ms": "补位延迟",
+            "dissolve_char_ms": "单字消散速度", "dissolve_stagger_ms": "整行消散跨度",
+            "follow_char_ms": "跟随消散速度", "follow_lead": "消散提前量",
+        }
+        for key, label in PARAM_LABELS.items():
+            sel = ValueTierSelector(FX_TIERS[key], fx.get(key, FX_DEFAULTS[key]))
+            self.fx_tiers[key] = sel
+            pform.addRow(label, sel)
+        self.fx_tiers["refill_delay_ms"].setToolTip(
+            "仅「原位替换」模式有效：唱完的行位先留空，等消散完再补入下一句。"
+        )
         p_group.setLayout(pform)
         layout.addWidget(p_group)
 
@@ -361,17 +322,14 @@ class SettingsDialog(QDialog):
         if ri >= 0:
             self.refill_combo.setCurrentIndex(ri)
         self.read_spin.setValue(self.cfg.get("read_lines", 2))
+        self.netease_edit.setText(self.cfg.get("netease_dir", ""))
 
         # fx 同步（主题可能改了 fx）
         self.fx_cfg = dict(self.cfg.get("fx", FX_DEFAULTS))
-        self.fx_enabled.setChecked(self.fx_cfg.get("enabled", True))
         for key, cb in self.fx_switches.items():
             cb.setChecked(self.fx_cfg.get(key, FX_DEFAULTS[key]))
-        for key, s in self.fx_sliders.items():
-            s.setValue(int(self.fx_cfg.get(key, FX_DEFAULTS[key])))
-        self.fx_glow_len.setValue(
-            int(float(self.fx_cfg.get("glow_len_chars", FX_DEFAULTS["glow_len_chars"])) * 10)
-        )
+        for key, sel in self.fx_tiers.items():
+            sel.setValue(self.fx_cfg.get(key, FX_DEFAULTS[key]))
         ei = self.fx_ease.findData(self.fx_cfg.get("easing", "ease_out"))
         if ei >= 0:
             self.fx_ease.setCurrentIndex(ei)
@@ -385,7 +343,6 @@ class SettingsDialog(QDialog):
             return
         if self.on_switch_theme:
             self.on_switch_theme(key, save=False)
-        self.theme_desc.setText(get_theme(key)["desc"])
         self._sync_controls_from_cfg()
 
     def _apply(self):
@@ -406,16 +363,18 @@ class SettingsDialog(QDialog):
             "show_line_number": self.lineno_check.isChecked(),
             "refill_mode": self.refill_combo.currentData(),
             "read_lines": self.read_spin.value(),
+            "netease_dir": self.netease_edit.text().strip(),
         })
-        # 收集 fx 参数
+        # 收集 fx 参数（enabled 总开关不再由 UI 暴露，保留配置原值）
         fx = self.cfg.setdefault("fx", dict(FX_DEFAULTS))
-        fx["enabled"] = self.fx_enabled.isChecked()
         for key, cb in self.fx_switches.items():
             fx[key] = cb.isChecked()
-        for key, s in self.fx_sliders.items():
-            fx[key] = s.value()
-        fx["glow_len_chars"] = self.fx_glow_len.value() / 10.0
+        for key, sel in self.fx_tiers.items():
+            fx[key] = sel.value()
         fx["easing"] = self.fx_ease.currentData()
+        # 收集飞行物配置
+        self._floating = self.floating_page.collect()
+        self.cfg["floating"] = self._floating
         # 实时生效并保存，但不关闭窗口（方便边调边看效果）
         if self.on_apply:
             self.on_apply()

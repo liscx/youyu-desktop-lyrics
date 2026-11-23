@@ -40,7 +40,7 @@ def build_tray(app, window, monitor, on_switch_theme, needs_calibration=lambda: 
     # 外观主题子菜单（遍历主题列表，新增主题自动出现）
     theme_menu = menu.addMenu("外观主题")
     theme_actions = {}
-    for key, label, icon_char, _desc in theme_list():
+    for key, label, icon_char in theme_list():
         act = theme_menu.addAction(f"{icon_char}  {label}")
         act.setCheckable(True)
         act.triggered.connect(lambda checked=False, k=key: on_switch_theme(k))
