@@ -4,6 +4,12 @@ title Desktop Lyrics
 
 set "PYEXE="
 
+rem 0) 项目虚拟环境（已装好全部依赖，最高优先级）
+if exist "%~dp0.build-venv\Scripts\python.exe" (
+    set "PYEXE=%~dp0.build-venv\Scripts\python.exe"
+    goto :found
+)
+
 rem 1) D:\python\<version>\python.exe (installed per version)
 if exist "D:\python\3.13.12\python.exe" (
     set "PYEXE=D:\python\3.13.12\python.exe"

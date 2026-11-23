@@ -15,17 +15,17 @@ python main.py
 
 ## 外观主题（多模式）
 
-内置三款主题，随时切换、即时生效：
+内置四款主题，随时切换、即时生效：
 
 | 主题 | 说明 |
 |------|------|
-| ❧ **雾中飞羽** | 月白雾灰、羽毛浮现消散、逐字羽化的电影感特效（默认） |
+| ❧ **雾中飞羽** | 月白雾灰、光影浮现消散、逐字淡出的电影感特效（默认） |
 | ☂ **忧郁** | 雾蓝冷色、雨滴飘落、纤细疏朗的排版 |
 | ♪ **经典** | 清爽通透，最初的桌面歌词设计 |
 | ✦ **霓虹** | 青与品红交织的强烈光晕 |
 
-> 「雾中飞羽」带一整套可独立开关的动画（入场/逐字/羽毛/微粒/雾气/呼吸/浮动/扫光/交叠），
-> 每个参数都可调。详见 [特效系统说明](docs/EFFECTS.md)。
+> 「雾中飞羽」的飘落物由**通用飞行物系统**驱动，羽毛只是其中一种素材，详见下方「飞行物系统」。
+> 文字动效（逐字浮现、呼吸、浮动、交叠）见 [特效系统说明](docs/EFFECTS.md)。
 
 切换方式（任选）：
 - **Ctrl+Alt+T** 循环切换主题
@@ -33,8 +33,21 @@ python main.py
 - 托盘图标 → “外观主题” 子菜单
 - 托盘 → “设置” → 顶部“外观主题”下拉框（可即时预览并微调各项）
 
-> 主题的参数定义在 `themes/presets.py`，新增主题只需往 `THEMES` 里加一个字典；
-> 专属绘制效果（如雨滴）在 `ui/lyric_window.py` 里按主题字段分支。
+> 主题的参数定义在 `themes/presets.py`，新增主题只需往 `THEMES` 里加一个字典。
+
+## 飞行物系统
+
+歌词周围飘落的羽毛、花瓣等，统一由一套**可插拔的飞行物系统**驱动：素材与运动逻辑分离，换素材不用重写运动代码。
+
+- **素材**：羽毛、樱花、花瓣、雪花、枫叶、光点、蝴蝶（自定义图片入口已预留，待接入）。
+- **四个场景独立配置**，互不覆盖：背景持续漂浮 / 歌词入场 / 逐字消散配置 / 歌词切换。
+- 每个场景可调：素材、数量、方向、速度、大小、随机偏向、随机大小、随机旋转；背景场景另有活动范围。
+- 数量/速度/偏转/旋转用**有限挡位**（少量·适中·较多·大量 等）；**大小**用拖条 + 实时示例（示例即实际大小，拖动实时变化）。
+- 方向用**二维方向盘**拖拽（八方向吸附，按住 Shift 自由调，双击复位）；活动范围用**可拖动矩形**。
+
+在「设置 → 飞行物」页调整，改动即时生效。旧版羽毛/雨滴配置会在首次启动时自动迁移到新系统，无需手动处理。
+
+实现见 `ui/floating_objects.py`（引擎+素材）、`ui/floating_widgets.py`（方向盘/范围控件）、`ui/floating_settings.py`（设置页）、`core/floating_config.py`（配置+迁移）。
 
 ## 操作
 
@@ -47,13 +60,15 @@ python main.py
 
 设置面板可调「显示行数」（1–8 行，窗口高度自动适配）与「显示行号」（右上角显示 `当前行 / 总行数`，默认关闭）。
 
+设置面板「外观」页底部有「网易云安装目录」输入框（CDP 补丁用）：填 `libcef.dll` 所在的文件夹（如 `E:\CloudMusic\CloudMusic`），可点「浏览...」选择；留空则自动探测常见安装位置。填好后点「应用」，补丁工具会读取该配置。
+
 ### 消失后补位方式
 
-「消失后补位」提供三种模式（配合雾中飞羽的逐字化羽效果）：
+「消失后补位」提供三种模式（配合雾中飞羽的整行消散效果）：
 
 | 模式 | 效果 |
 |------|------|
-| **整批补位**（默认） | 唱一行化羽消失一行、空位保留；整批（`读条行数` 行）都唱完后，短暂停顿再整批换新 |
+| **整批补位**（默认） | 唱一行消散一行、空位保留；整批（`读条行数` 行）都唱完后，短暂停顿再整批换新 |
 | **原位替换** | 唱完的行位立刻补入下一句歌词，其余行不动（哪行空补哪行） |
 | **逐行上移** | 传统方式：当前行固定在第 2 行，整窗歌词随进度上移 |
 
@@ -69,25 +84,34 @@ python main.py
 
 歌词进度通过网易云内嵌 DevTools 端口（`127.0.0.1:21631`）读取，启动即从当前播放位置开始，不会从头。
 
-补丁工具（需先关闭网易云）：
+补丁工具（需先关闭网易云）。源码运行与打包后各一套命令，效果相同：
 
 ```bat
-python cdp_patch.py status   :: 查看补丁状态
-python cdp_patch.py patch    :: 打补丁（自动备份 libcef.dll.bak）
-python cdp_patch.py revert   :: 回滚
+python cdp_patch.py status     :: 查看补丁状态
+python cdp_patch.py patch      :: 打补丁（自动备份 libcef.dll.bak）
+python cdp_patch.py revert     :: 回滚
+
+cdp_patch.exe status            :: 打包目录下的补丁工具，无需 Python
+cdp_patch.exe patch
+cdp_patch.exe revert
 ```
+
+补丁工具定位 `libcef.dll` 的顺序：设置面板里填的「网易云安装目录」→ 常见安装位置自动探测 → 历史默认路径。装在非标准目录时请在设置面板里指定。
 
 > 网易云更新会替换 `libcef.dll`，届时补丁失效、自动降级到标题模式。关闭网易云后重新 `patch` 即可。
 
 ## 工程结构
 
 ```
-desktop-gc/
+youyu-desktop-lyrics/
 ├── main.py              程序入口（仅做组装）
 ├── config.json          运行时配置（外观/主题/位置/行为）
 ├── 启动歌词.bat
+├── build.spec           PyInstaller 打包配置（两个 exe 共享一份依赖）
+├── build.bat            一键打包脚本（内置依赖，文件夹版）
 ├── core/                数据与逻辑层（无 UI 依赖）
 │   ├── config.py        配置读写
+│   ├── floating_config.py  飞行物配置/挡位映射/旧配置迁移
 │   ├── media.py         播放监控（CDP / SMTC / 标题）
 │   ├── lyrics.py        歌词获取、解析、缓存
 │   └── cdp.py           DevTools 协议客户端
@@ -95,8 +119,11 @@ desktop-gc/
 │   └── presets.py       主题预设与切换逻辑
 ├── ui/                  界面层
 │   ├── lyric_window.py  歌词窗绘制与交互
-│   ├── effects.py       雾中飞羽特效引擎（粒子/缓动/动画）
-│   ├── settings.py      设置面板（外观 + 特效两页）
+│   ├── effects.py       文字动效引擎（只管文字动画，不含粒子）
+│   ├── floating_objects.py   通用飞行物引擎 + 素材绘制
+│   ├── floating_widgets.py   方向盘 / 活动范围 / 挡位控件
+│   ├── floating_settings.py  飞行物设置页
+│   ├── settings.py      设置面板（外观 / 飞行物 / 文字动效三页）
 │   ├── tray.py          系统托盘
 │   └── hotkey.py        全局热键 / Win32 工具
 ├── docs/
@@ -110,3 +137,26 @@ desktop-gc/
 ## 依赖
 
 见 `requirements.txt`。主要：PySide6、requests、pycryptodome、winrt（SMTC）、websocket-client。
+
+## 打包为 exe（内置依赖）
+
+双击 `build.bat` 一键打包，产物在 `dist/youyu-desktop-lyrics/`：
+
+```
+dist/youyu-desktop-lyrics/
+├── youyu.exe          主程序，双击即用（无控制台）
+├── cdp_patch.exe       补丁工具（命令行）
+├── config.json         外置配置，可编辑；升级时保留即可延续个人设置
+└── _internal/          内置 Python 解释器与全部依赖，勿删
+```
+
+整个文件夹拷到目标机器即可运行，目标机器无需安装 Python 或任何依赖。`config.json` 与 `cache/` 始终放在 exe 所在目录，与源码目录互不干扰。
+
+首次构建需先准备构建环境（`.build-venv/` 已被 git 忽略）：
+
+```bat
+E:\Python\Python312\python.exe -m venv .build-venv
+.build-venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+```
+
+打包配置在 `build.spec`：主程序与补丁工具打进同一个文件夹、`_internal/` 里依赖只存一份。改了源码后重新运行 `build.bat` 即可覆盖了重建。
