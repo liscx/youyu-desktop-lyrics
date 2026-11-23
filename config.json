@@ -2,8 +2,9 @@
   "theme": "mist",
   "source": "auto",
   "netease_lyric_dir": "",
-  "font_family": "Microsoft YaHei",
-  "font_size": 33,
+  "netease_dir": "E:\\CloudMusic\\CloudMusic",
+  "font_family": "Tahoma",
+  "font_size": 12,
   "font_bold": false,
   "color_normal": "#f2f6fa",
   "color_highlight": "#f2f6fa",
@@ -34,53 +35,123 @@
   "refresh_ms": 80,
   "fx": {
     "enabled": true,
-    "fade_in_ms": 837,
-    "fade_out_ms": 353,
+    "fade_in_ms": 900,
+    "fade_out_ms": 450,
     "blur_max": 12,
     "rise_px": 6,
-    "char_stagger_ms": 48,
+    "char_stagger_ms": 60,
     "float_px": 0,
     "float_ms": 5200,
-    "breath_pct": 9,
+    "breath_pct": 10,
     "breath_ms": 3600,
-    "sweep_ms": 4200,
-    "sweep_alpha": 31,
-    "sweep_fade_start": 95,
-    "sweep_width_pct": 17,
     "glow_len_chars": 2.5,
-    "batch_gap_ms": 223,
-    "refill_delay_ms": 1003,
+    "batch_gap_ms": 150,
+    "refill_delay_ms": 1000,
     "word_dissolve": true,
-    "dissolve_char_ms": 351,
-    "dissolve_stagger_ms": 368,
-    "dissolve_drift_x": 20,
-    "dissolve_drift_y": 0,
-    "dissolve_spread_y": 200,
-    "dissolve_feathers_per_char": 5,
+    "dissolve_char_ms": 360,
+    "dissolve_stagger_ms": 420,
     "follow_dissolve": true,
-    "follow_char_ms": 582,
-    "follow_lead": 9,
-    "mist_speed": 0.15,
-    "mist_alpha": 20,
-    "feather_alpha": 150,
-    "feather_color": "#DCE6F1",
-    "mist_color": "#B7C6D8",
+    "follow_char_ms": 650,
+    "follow_lead": 6,
     "easing": "ease_out",
     "char_reveal": false,
-    "feathers": true,
-    "far_feathers": true,
-    "motes": false,
-    "mist_flow": false,
     "breathing": true,
     "float": false,
-    "light_sweep": false,
     "crossfade": true,
     "soft_glow": false,
-    "feather_on_enter": false,
-    "feather_on_exit": true,
-    "feather_on_line_end": false,
-    "feather_count": 30,
-    "far_feather_count": 8,
-    "mote_count": 41
+    "feather_color": "#DCE6F1"
+  },
+  "floating": {
+    "version": 1,
+    "scenes": {
+      "ambient": {
+        "enabled": true,
+        "material": "sakura",
+        "count": "some",
+        "direction": [
+          0.7071067811865476,
+          0.7071067811865476
+        ],
+        "random_deviation": false,
+        "deviation": "slight",
+        "size": 1.45,
+        "random_size": true,
+        "speed": "slow",
+        "random_rotation": false,
+        "rotation_speed": "slow",
+        "area": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ]
+      },
+      "enter": {
+        "enabled": false,
+        "material": "feather",
+        "count": "few",
+        "direction": [
+          0.0,
+          -1.0
+        ],
+        "random_deviation": false,
+        "deviation": "slight",
+        "size": 0.7,
+        "random_size": false,
+        "speed": "slow",
+        "random_rotation": false,
+        "rotation_speed": "natural",
+        "area": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ]
+      },
+      "exit": {
+        "enabled": true,
+        "material": "butterfly",
+        "count": "many",
+        "direction": [
+          -1.0,
+          0.0
+        ],
+        "random_deviation": true,
+        "deviation": "slight",
+        "size": 0.7,
+        "random_size": false,
+        "speed": "natural",
+        "random_rotation": true,
+        "rotation_speed": "slow",
+        "area": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switch": {
+        "enabled": false,
+        "material": "feather",
+        "count": "few",
+        "direction": [
+          -0.6,
+          -0.8
+        ],
+        "random_deviation": false,
+        "deviation": "slight",
+        "size": 0.7,
+        "random_size": false,
+        "speed": "natural",
+        "random_rotation": true,
+        "rotation_speed": "natural",
+        "area": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
   }
 }

@@ -1,73 +1,57 @@
 # -*- coding: utf-8 -*-
 """配置管理：读写 config.json，提供默认值。
 
-config.json 与 cache/ 始终位于项目根目录（core/ 的上一级），
-与模块文件位置解耦，方便工程分层重构。
+config.json 与 cache/ 与代码位置解耦：源码运行时位于项目根目录
+（core/ 的上一级），打包后（PyInstaller frozen）位于 exe 所在目录，
+始终外置可编辑。
 """
 import json
 import os
+import sys
 
-# 项目根目录 = 本文件所在 core/ 的上一级
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if getattr(sys, "frozen", False):
+    # 打包后：exe 所在目录，配置外置，升级不丢设置
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    # 源码运行：项目根目录 = 本文件所在 core/ 的上一级
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 
-# 雾中飞羽特效：每个动画模块独立开关 + 参数（见 ui/effects.py）
+# 文字与氛围动效参数（见 ui/effects.py）。
+# 飘落粒子（原 feathers/motes/feather_on_* / feather_count 等）已迁移到
+# 通用飞行物系统，配置见 core/floating_config.py；旧键仅由迁移函数读取一次。
 FX_DEFAULTS = {
     "enabled": True,             # 特效总开关
     # 时间 / 强度 / 距离
     "fade_in_ms": 900,           # 入场时长
     "fade_out_ms": 700,          # 退场时长
-    "blur_max": 7,               # 羽化模糊最大程度(0-12)
+    "blur_max": 7,               # 文字模糊最大程度(0-12)
     "rise_px": 12,               # 入场文字上浮距离(px)
     "char_stagger_ms": 60,       # 逐字浮现的每字延迟(ms)
     "float_px": 3,               # 整体上下浮动幅度(px)
     "float_ms": 5200,            # 浮动周期(ms)
     "breath_pct": 10,            # 微光呼吸幅度：百分比整数 0-50，引擎读取时 /100 转小数
     "breath_ms": 3600,           # 呼吸周期(ms)
-    "sweep_ms": 4200,            # 扫光周期(ms)
-    "sweep_alpha": 34,           # 光条峰值透明度(0-80)
-    "sweep_fade_start": 55,      # 光条从 55% 处开始渐隐(0-95)，到右边界归零，避免硬切
-    "sweep_width_pct": 25,       # 扫光条宽度(占窗口宽度%)，默认 25
     "glow_len_chars": 2.5,       # 文字柔光光条长度(以字宽为单位)，默认 2.5 字
     "batch_gap_ms": 220,         # 整批补位时上一批完全消失到下一批出现的间隔(ms)
-    "refill_delay_ms": 1000,     # 原位替换：空行位等消散羽毛飘走后再补入下一句的延迟(ms)
-    # 逐字化羽消散：歌词消失时从左到右化为羽毛，向左上方飘散
+    "refill_delay_ms": 1000,     # 原位替换：空行位等消散粒子飘走后再补入下一句的延迟(ms)
+    # 逐字消散（文字侧；飞行物形态由 floating 的 exit 场景控制）
     "word_dissolve": True,       # 逐字消散（关闭则退回整行渐隐）
-    "dissolve_char_ms": 360,     # 单个字化羽时长(ms)
-    "dissolve_stagger_ms": 420,  # 整行从左到右化羽的延迟跨度(ms)
-    "dissolve_drift_x": 22,      # 消散羽毛向左飘散距离(px)
-    "dissolve_drift_y": 34,      # 消散羽毛向上飘散距离(px)
-    "dissolve_spread_y": 70,     # 化羽区纵向散布(半高占行高百分比)：70=±0.7行高，总高1.4行高(原0.35的两倍)
-    "dissolve_feathers_per_char": 1,  # 化羽时每个字生成几片羽毛(1-6)
-    # 逐字跟随消散：唱到哪散到哪，切行时把未散完的字慢慢散完（贯穿整行生命周期）
+    "dissolve_char_ms": 360,     # 单个字消散时长(ms)
+    "dissolve_stagger_ms": 420,  # 整行从左到右消散的延迟跨度(ms)
     "follow_dissolve": True,     # 逐字跟随消散总开关
-    "follow_char_ms": 340,       # 单字从被读条扫过到完全化羽的时长(ms)
+    "follow_char_ms": 340,       # 单字从被读条扫过到完全消散的时长(ms)
     "follow_lead": 6,            # 读条越过该字多少比例(%)后开始消散
-    "mist_speed": 0.15,          # 雾气流动速度
-    "mist_alpha": 26,            # 雾气不透明度(0-80)
-    "feather_alpha": 150,        # 羽毛不透明度(0-255)
-    "feather_color": "#DCE6F1",  # 羽毛/微粒颜色
-    "mist_color": "#B7C6D8",     # 雾气颜色
     "easing": "ease_out",        # 缓动曲线
-    # 独立开关
-    "char_reveal": True,         # 逐字从雾中浮现
-    "feathers": True,            # 近景羽毛漂浮
-    "far_feathers": True,        # 远景羽毛(空间层次)
-    "motes": True,               # 微粒漂浮
-    "mist_flow": True,           # 雾气流动
+    # 独立开关（文字动效，飞行物开关在 floating.scenes.*.enabled）
+    "char_reveal": True,         # 逐字浮现
     "breathing": True,           # 微光呼吸
     "float": True,               # 整体浮动
-    "light_sweep": True,         # 光线扫过
     "crossfade": True,           # 行切换交叠
     "soft_glow": True,           # 文字柔光(非霓虹描边)
-    "feather_on_enter": True,    # 入场撒羽毛
-    "feather_on_exit": True,     # 逐字跟随消散：每字化出的羽毛
-    "feather_on_line_end": True, # 整行读完(切行)时整行从左到右化羽的羽毛，独立于逐字跟随羽毛
-    # 粒子数量
-    "feather_count": 12,
-    "far_feather_count": 8,
-    "mote_count": 22,
+    # 飞行物主题色（注入飞行物引擎，不是粒子数量参数）
+    "feather_color": "#DCE6F1",
 }
 
 DEFAULTS = {
@@ -77,6 +61,8 @@ DEFAULTS = {
     "source": "auto",
     # 网易云歌词缓存目录（留空自动探测）
     "netease_lyric_dir": "",
+    # 网易云安装目录（CDP 补丁用，填 libcef.dll 所在文件夹；留空自动探测）
+    "netease_dir": "",
     # 外观（会被所选主题覆盖，这里的取值 = classic 经典主题）
     "font_family": "Microsoft YaHei",
     "font_size": 30,

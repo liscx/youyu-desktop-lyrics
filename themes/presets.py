@@ -24,7 +24,6 @@ THEME_FIELDS = (
 CLASSIC = {
     "label": "经典",
     "icon": "♪",
-    "desc": "清爽通透，还原最初的桌面歌词",
     "params": {
         "font_family": "Microsoft YaHei",
         "font_size": 30,
@@ -51,7 +50,6 @@ CLASSIC = {
 MELANCHOLY = {
     "label": "忧郁",
     "icon": "☂",
-    "desc": "雨落窗棂，雾蓝色调，把心事慢慢唱给你听",
     "params": {
         "font_family": "Microsoft YaHei",
         "font_size": 32,
@@ -78,7 +76,6 @@ MELANCHOLY = {
 NEON = {
     "label": "霓虹",
     "icon": "✦",
-    "desc": "夜色霓虹，青与品红交织的强烈光感",
     "params": {
         "font_family": "Microsoft YaHei",
         "font_size": 30,
@@ -105,7 +102,6 @@ NEON = {
 MIST = {
     "label": "雾中飞羽",
     "icon": "❧",
-    "desc": "月白雾灰间，羽毛缓缓浮现又消散——空灵、安静、自由",
     "params": {
         "font_family": "Microsoft YaHei",
         "font_size": 31,
@@ -126,26 +122,18 @@ MIST = {
         "ambient_color": "#DCE6F1",
         "accent_line": False,
     },
-    # 该主题专属的特效参数（合并进 cfg['fx']）
+    # 该主题专属的文字动效参数（合并进 cfg['fx']）。
+    # 飘落粒子改由飞行物系统管理，主题只通过 feather_color 注入飞行物配色。
     "fx": {
         "enabled": True,
-        "feather_color": "#DCE6F1",
-        "mist_color": "#B7C6D8",
+        "feather_color": "#DCE6F1",  # 注入飞行物引擎的主题色
         "char_reveal": True,
-        "feathers": True,
-        "far_feathers": True,
-        "motes": True,
-        "mist_flow": True,
         "breathing": True,
         "float": True,
-        "light_sweep": True,
         "crossfade": True,
         "soft_glow": True,
-        "feather_on_enter": True,
-        "feather_on_exit": True,    # 逐字跟随消散：每字化出的羽毛
-        "feather_on_line_end": True, # 整行读完时整行化羽的羽毛（可独立关闭）
-        "word_dissolve": True,      # 从左到右逐字消散
-        "follow_dissolve": True,    # 唱到哪散到哪 + 切行收尾
+        "word_dissolve": True,
+        "follow_dissolve": True,
     },
 }
 
@@ -164,8 +152,8 @@ def get_theme(name):
 
 
 def theme_list():
-    """返回 [(key, label, icon, desc), ...]，供 UI 遍历。"""
-    return [(k, v["label"], v["icon"], v["desc"]) for k, v in THEMES.items()]
+    """返回 [(key, label, icon), ...]，供 UI 遍历。"""
+    return [(k, v["label"], v["icon"]) for k, v in THEMES.items()]
 
 
 def apply_theme(cfg, name):

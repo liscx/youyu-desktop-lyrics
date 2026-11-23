@@ -4,41 +4,20 @@
 绘制完全由 cfg 驱动（cfg 的外观键由当前主题决定），
 因此切换主题只需 apply_config() + update() 即可即时生效。
 """
-import random
-
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 from PySide6.QtWidgets import QWidget, QMenu, QApplication
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetrics, QBrush,
-    QPen, QPainterPath, QLinearGradient,
+    QPen, QPainterPath,
 )
 
 from core.config import save_config
+from core.floating_config import ensure_floating
 from core.lyrics import get_lyrics
 from ui.hotkey import set_click_through
 from ui.effects import EffectEngine
+from ui.floating_objects import FloatingEngine
 from ui.settings import SettingsDialog
-
-
-class RainDrop:
-    """一颗雨滴（忧郁主题的氛围粒子）。"""
-
-    __slots__ = ("x", "y", "length", "speed", "alpha")
-
-    def __init__(self, w, h):
-        self.reset(w, h, random_initial=True)
-
-    def reset(self, w, h, random_initial=False):
-        self.x = random.uniform(0, w) if w > 0 else 0
-        self.length = random.uniform(8, 22)
-        self.speed = random.uniform(1.6, 4.2)
-        self.alpha = random.randint(30, 95)
-        self.y = random.uniform(-h, h) if random_initial else -self.length
-
-    def step(self, w, h):
-        self.y += self.speed
-        if self.y - self.length > h:
-            self.reset(w, h)
 
 
 class LyricWindow(QWidget):
@@ -54,13 +33,11 @@ class LyricWindow(QWidget):
         self.lyric_key = ""
         self._drag_pos = None
 
-        # 雨滴粒子（忧郁主题）
-        self._rain = []
-        self._ambient_timer = QTimer(self)
-        self._ambient_timer.timeout.connect(self._step_ambient)
-
-        # 雾中飞羽特效引擎 + 独立动画时钟
+        # 通用飞行物引擎：接管全部粒子（羽毛/微粒/雨滴/新素材）
+        self.floating = FloatingEngine(ensure_floating(cfg))
+        # 雾中飞羽特效引擎（只管文字/氛围动效）+ 独立动画时钟
         self.fx = EffectEngine(cfg)
+        self.fx.floater = self.floating
         self._fx_timer = QTimer(self)
         self._fx_timer.timeout.connect(self._step_fx)
         self._fx_last_tick = 0
@@ -166,42 +143,23 @@ class LyricWindow(QWidget):
         ))
         # 特效引擎重读配置
         self.fx.configure(self.cfg)
+        # 飞行物引擎重读配置 + 注入主题色（不要把实例覆盖成配置字典）
+        float_cfg = ensure_floating(self.cfg)
+        self.floating.configure(float_cfg)
+        self.fx.floater = self.floating
+        self.floating.set_color(self.cfg.get("fx", {}).get(
+            "feather_color", self.cfg.get("color_highlight", "#DCE6F1")))
+        # 忧郁主题的雨滴已迁移为飞行物素材，通过 legacy_rain 启用
+        self.floating.legacy_rain["enabled"] = bool(self.cfg.get("ambient", False))
+        if self.cfg.get("ambient"):
+            self.floating.legacy_rain["color"] = self.cfg.get("ambient_color", "#9FC6FF")
         self.click_through = self.cfg.get("click_through", True)
         self.locked = self.cfg.get("locked", True)
-        # 主题专属
-        self.ambient = self.cfg.get("ambient", False)
-        self.ambient_color = QColor(self.cfg.get("ambient_color", "#9FC6FF"))
-        self.ambient_density = self.cfg.get("ambient_density", 46)
         self.accent_line = self.cfg.get("accent_line", False)
-
-        self._sync_ambient()
 
         # 只有锁定且开启穿透时才穿透
         effective = self.click_through and self.locked
         self.set_click_through(effective)
-
-    def _sync_ambient(self):
-        """根据主题开关启停雨滴动画。"""
-        if self.ambient:
-            if not self._rain:
-                self._rebuild_rain()
-            if not self._ambient_timer.isActive():
-                self._ambient_timer.start(33)  # ~30fps
-        else:
-            self._ambient_timer.stop()
-            self._rain = []
-
-    def _rebuild_rain(self):
-        w, h = self.width(), max(self.height(), 160)
-        self._rain = [RainDrop(w, h) for _ in range(self.ambient_density)]
-
-    def _step_ambient(self):
-        if not self._rain:
-            return
-        w, h = self.width(), self.height()
-        for drop in self._rain:
-            drop.step(w, h)
-        self.update()
 
     def set_click_through(self, enabled):
         self.winId()  # 确保原生窗口已创建
@@ -396,8 +354,6 @@ class LyricWindow(QWidget):
         w = self.cfg.get("width", 1000)
         geom = self.geometry()
         self.setGeometry(geom.x(), geom.y(), w, max(160, h))
-        if self.ambient and len(self._rain) != self.ambient_density:
-            self._rebuild_rain()
 
     # ---------- 绘制 ----------
     def paintEvent(self, event):
@@ -412,12 +368,9 @@ class LyricWindow(QWidget):
         fx_on = self.fx.enabled
         w, h = self.width(), self.height()
 
-        # ---- 特效背景层：雾气流动 + 远景羽毛 ----
+        # ---- 特效背景层：远景飞行物（文字下层）----
         if fx_on:
-            self.fx.draw_background(painter, w, h)
-        # 氛围雨滴（忧郁主题，与特效互斥但两者都开也共存无妨）
-        if self.ambient and self._rain:
-            self._draw_rain(painter)
+            self.floating.draw(painter, layer="background")
 
         if not self.lines:
             painter.setFont(self.font)
@@ -516,14 +469,9 @@ class LyricWindow(QWidget):
                         painter, 20, int(y + self.cfg["font_size"] + fy), text, c
                     )
 
-        # ---- 特效前景层：微粒 + 近景羽毛 + 扫光 ----
+        # ---- 特效前景层：飞行物 ----
         if fx_on:
-            self.fx.draw_foreground(painter, w, h)
-            sweep = self.fx.sweep_pos()
-            if sweep >= 0:
-                self._draw_sweep(
-                    painter, self._line_row_y + self.fx.float_offset(), line_h, sweep
-                )
+            self.floating.draw(painter, layer="foreground")
 
         if self.show_line_number:
             self._draw_line_number(painter, idx)
@@ -692,25 +640,6 @@ class LyricWindow(QWidget):
         )
         painter.restore()
 
-    def _draw_sweep(self, painter, y, line_h, pos):
-        """光线扫过文字：亮度随位置渐隐，到边界归零，避免硬切。"""
-        env = self.fx.sweep_alpha(pos)
-        if env <= 0:
-            return
-        w = self.width()
-        sweep_x = -w * 0.3 + pos * w * 1.6
-        band_w = w * self.fx.sweep_width
-        grad = QLinearGradient(sweep_x, 0, sweep_x + band_w, 0)
-        peak = max(1, int(self.fx.sweep_alpha_max * env))
-        grad.setColorAt(0.0, QColor(255, 255, 255, 0))
-        grad.setColorAt(0.5, QColor(242, 246, 250, peak))
-        grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-        painter.save()
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(grad))
-        painter.drawRect(0, int(y), w, int(line_h))
-        painter.restore()
-
     def _draw_line_number(self, painter, idx):
         """在窗口右上角绘制「当前行 / 总行数」。"""
         total = len(self.lines)
@@ -729,20 +658,6 @@ class LyricWindow(QWidget):
             0, 6, self.width() - 14, 20,
             Qt.AlignRight | Qt.AlignTop, f"{cur} / {total}"
         )
-        painter.restore()
-
-    def _draw_rain(self, painter):
-        """绘制雨滴（忧郁主题氛围）。"""
-        painter.save()
-        color = QColor(self.ambient_color)
-        for drop in self._rain:
-            c = QColor(color)
-            c.setAlpha(drop.alpha)
-            pen = QPen(c, 1.0)
-            pen.setCapStyle(Qt.RoundCap)
-            painter.setPen(pen)
-            x, y = int(drop.x), int(drop.y)
-            painter.drawLine(x, y, x - 2, y + int(drop.length))
         painter.restore()
 
     def _draw_accent_line(self, painter, y, line_h):
