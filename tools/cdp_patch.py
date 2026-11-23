@@ -14,7 +14,44 @@
 import os
 import sys
 
-LIBCEF = r"E:\CloudMusic\CloudMusic\libcef.dll"
+
+def _configured_netease_dir():
+    """读取设置面板填写的网易云安装目录（exe / 源码两种运行位置都能找到 config.json）。"""
+    try:
+        import json
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(base, "config.json"), "r", encoding="utf-8") as f:
+            return (json.load(f).get("netease_dir") or "").strip()
+    except Exception:
+        return ""
+
+
+def _find_libcef():
+    """定位 libcef.dll：设置面板指定 > 历史/常见安装位置。"""
+    netease_dir = _configured_netease_dir()
+    if netease_dir:
+        # 用户明确指定：即使文件不存在也返回该路径，让 status() 报出明确错误
+        if netease_dir.lower().endswith(".dll"):
+            return netease_dir
+        return os.path.join(netease_dir, "libcef.dll")
+    candidates = [
+        r"E:\CloudMusic\CloudMusic\libcef.dll",
+        os.path.expandvars(r"%ProgramFiles%\Netease\CloudMusic\libcef.dll"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Netease\CloudMusic\libcef.dll"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Netease\CloudMusic\libcef.dll"),
+        r"D:\CloudMusic\CloudMusic\libcef.dll",
+        r"C:\CloudMusic\CloudMusic\libcef.dll",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return candidates[0]
+
+
+LIBCEF = _find_libcef()
 BACKUP = LIBCEF + ".bak"
 PORT = 21631
 

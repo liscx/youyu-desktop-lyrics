@@ -6,10 +6,15 @@ __pycache__/
 # 歌词/数据缓存
 cache/
 
-# 本地虚拟环境
+# 本地虚拟环境 / 打包构建产物
+.build-venv/
 .venv/
 venv/
 env/
+build/
+dist/
+*.spec
+!build.spec
 
 # 系统与编辑器
 .DS_Store
